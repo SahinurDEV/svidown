@@ -16,10 +16,10 @@ from .models import Download, DownloadStatus, ChapterFile
 log = logging.getLogger("downloader")
 
 # Shared multiprocessing manager
-_manager: multiprocessing.Manager | None = None
+_manager = None
 
 
-def _get_manager() -> multiprocessing.Manager:
+def _get_manager():
     """Get or create the shared multiprocessing manager."""
     global _manager
     if _manager is None:
