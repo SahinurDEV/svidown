@@ -1,6 +1,7 @@
 services:
   svidown:
-    build: .
+    image: sahinurdev/svidown:latest
+    # build: .  # Uncomment to build from source
     container_name: svidown
     restart: unless-stopped
     ports:

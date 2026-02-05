@@ -1,5 +1,8 @@
 # svidown
 
+[![Docker Hub](https://img.shields.io/docker/pulls/sahinurdev/svidown)](https://hub.docker.com/r/sahinurdev/svidown)
+[![Docker Image Version](https://img.shields.io/docker/v/sahinurdev/svidown/latest)](https://hub.docker.com/r/sahinurdev/svidown)
+
 **Download videos from 1000+ websites** - A modern, self-hosted video downloader with a clean web interface.
 
 ## Supported Platforms
@@ -35,21 +38,28 @@ svidown supports downloading **public videos only** from:
 ### Using Docker
 
 ```bash
-docker run -d -p 3000:3000 -v /path/to/downloads:/downloads svidown
+docker run -d -p 3000:3000 -v /path/to/downloads:/downloads sahinurdev/svidown
 ```
+
+Then open http://localhost:3000 in your browser.
 
 ### Using Docker Compose
 
 ```yaml
 services:
   svidown:
-    build: .
+    image: sahinurdev/svidown:latest
     container_name: svidown
     restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
-      - /path/to/downloads:/downloads
+      - ./downloads:/downloads
+```
+
+Run with:
+```bash
+docker compose up -d
 ```
 
 ## Configuration
