@@ -1,0 +1,45 @@
+# Downloads folder (runtime data)
+/downloads
+
+# Frontend
+/frontend/.next
+/frontend/out
+/frontend/node_modules
+/frontend/package-lock.json
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv/
+.eggs/
+*.egg-info/
+
+# State files (JSON persistence)
+queue.json
+pending.json
+done.json
+
+# IDEs and editors
+.idea/
+.vscode/*
+!.vscode/launch.json
+*.sublime-workspace
+.history/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log
+yarn-error.log
+
+# Claude Code
+.claude/
+
+# Misc
+chrome-profiler-events*.json
+speed-measure-plugin*.json

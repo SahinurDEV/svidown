@@ -1,0 +1,25 @@
+#!/bin/sh
+
+echo "Setting umask to ${UMASK}"
+umask ${UMASK}
+echo "Creating download directory (${DOWNLOAD_DIR}), state directory (${STATE_DIR}), and temp dir (${TEMP_DIR})"
+mkdir -p "${DOWNLOAD_DIR}" "${STATE_DIR}" "${TEMP_DIR}"
+
+if [ `id -u` -eq 0 ] && [ `id -g` -eq 0 ]; then
+    if [ "${UID}" -eq 0 ]; then
+        echo "Warning: it is not recommended to run as root user, please check your setting of the UID environment variable"
+    fi
+    if [ "${CHOWN_DIRS:-true}" != "false" ]; then
+        echo "Changing ownership of download and state directories to ${UID}:${GID}"
+        chown -R "${UID}":"${GID}" /app "${DOWNLOAD_DIR}" "${STATE_DIR}" "${TEMP_DIR}"
+    fi
+    echo "Starting BgUtils POT Provider"
+    gosu "${UID}":"${GID}" bgutil-pot server >/tmp/bgutil-pot.log 2>&1 &
+    echo "Running svidown as user ${UID}:${GID}"
+    exec gosu "${UID}":"${GID}" python3 -m app.server
+else
+    echo "User set by docker; running svidown as `id -u`:`id -g`"
+    echo "Starting BgUtils POT Provider"
+    bgutil-pot server >/tmp/bgutil-pot.log 2>&1 &
+    exec python3 -m app.server
+fi

@@ -1,0 +1,18 @@
+[project]
+name = "svidown"
+version = "1.0.0"
+description = "Download videos from 1000+ websites - A modern video downloader with web interface"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "python-socketio>=5.0,<6.0",
+    "yt-dlp[default,curl-cffi,deno]",
+    "watchfiles",
+]
+
+[dependency-groups]
+dev = [
+    "pylint",
+    "pytest",
+    "pytest-asyncio",
+]

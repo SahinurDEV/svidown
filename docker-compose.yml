@@ -1,0 +1,11 @@
+services:
+  svidown:
+    build: .
+    container_name: svidown
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      - PORT=${PORT:-3000}
+    volumes:
+      - ./downloads:/downloads
