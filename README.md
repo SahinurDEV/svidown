@@ -2,8 +2,11 @@
 
 [![Docker Hub](https://img.shields.io/docker/pulls/sahinurdev/svidown)](https://hub.docker.com/r/sahinurdev/svidown)
 [![Docker Image Version](https://img.shields.io/docker/v/sahinurdev/svidown/latest)](https://hub.docker.com/r/sahinurdev/svidown)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Download videos from 1000+ websites** - A modern, self-hosted video downloader with a clean web interface.
+
+**Supported Architectures:** `linux/amd64` · `linux/arm64`
 
 ## Supported Platforms
 
