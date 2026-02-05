@@ -78,10 +78,11 @@ def create_app(config: Config | None = None) -> tuple[web.Application, DownloadM
     setup_cors(app)
 
     # Initialize manager on startup
-    app.on_startup.append(lambda app: manager.initialize())
+    async def on_startup(app):
+        await manager.initialize()
+        start_options_watcher(sio, config)
 
-    # Start options file watcher on startup
-    app.on_startup.append(lambda app: start_options_watcher(sio, config))
+    app.on_startup.append(on_startup)
 
     # Store references for testing
     app["config"] = config
