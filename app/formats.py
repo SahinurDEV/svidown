@@ -48,10 +48,10 @@ def build_format_string(format: str, quality: str) -> str:
             return (
                 f"bestvideo[vcodec~='^((he|a)vc|h26[45])']{vres}+bestaudio[acodec=aac]/"
                 f"bestvideo[vcodec~='^((he|a)vc|h26[45])']{vres}+bestaudio{afmt}/"
-                f"bestvideo{vcombo}+bestaudio{afmt}/best{vcombo}"
+                f"bestvideo{vcombo}+bestaudio{afmt}/best{vcombo}/best"
             )
 
-        return f"bestvideo{vcombo}+bestaudio{afmt}/best{vcombo}"
+        return f"bestvideo{vcombo}+bestaudio{afmt}/best{vcombo}/bestvideo{vres}+bestaudio/best{vres}/best"
 
     raise ValueError(f"Unknown format: {format}")
 

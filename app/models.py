@@ -78,6 +78,8 @@ class Download:
         result["status"] = self.status.value
         result["chapter_files"] = [cf if isinstance(cf, dict) else cf.to_dict()
                                    for cf in self.chapter_files]
+        # Never serialize the heavy entry dict
+        result.pop("entry", None)
         return result
 
     def to_json(self) -> str:

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useDownloads } from '@/context/DownloadsContext';
 import { formatFileSize, cn, getApiBaseUrl } from '@/lib/utils';
 import {
@@ -10,43 +11,85 @@ import {
   Download,
   RotateCcw,
   FileCheck,
+  ChevronDown,
+  Search,
+  Filter,
 } from 'lucide-react';
+
+const PAGE_SIZE = 50;
+
+type FilterMode = 'all' | 'finished' | 'error';
 
 export default function CompletedDownloads() {
   const { done, configuration, deleteDownloads, addDownload, toggleChecked, setAllChecked } =
     useDownloads();
 
-  const downloads = Array.from(done.values());
-  const checkedCount = downloads.filter((d) => d.checked).length;
-  const allChecked = downloads.length > 0 && checkedCount === downloads.length;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterMode, setFilterMode] = useState<FilterMode>('all');
+
+  const allDownloads = useMemo(() => Array.from(done.values()), [done]);
+
+  // Filter and search
+  const filteredDownloads = useMemo(() => {
+    let result = allDownloads;
+
+    if (filterMode === 'finished') {
+      result = result.filter((d) => d.status === 'finished');
+    } else if (filterMode === 'error') {
+      result = result.filter((d) => d.status === 'error');
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (d) =>
+          d.title?.toLowerCase().includes(q) ||
+          d.url?.toLowerCase().includes(q) ||
+          d.filename?.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [allDownloads, filterMode, searchQuery]);
+
+  // Only render visible items
+  const visibleDownloads = useMemo(
+    () => filteredDownloads.slice(0, visibleCount),
+    [filteredDownloads, visibleCount]
+  );
+
+  const remaining = filteredDownloads.length - visibleCount;
+  const totalCount = allDownloads.length;
+  const completedCount = allDownloads.filter((d) => d.status === 'finished').length;
+  const failedCount = allDownloads.filter((d) => d.status === 'error').length;
+  const checkedCount = allDownloads.filter((d) => d.checked).length;
+  const allChecked = allDownloads.length > 0 && checkedCount === allDownloads.length;
   const someChecked = checkedCount > 0 && !allChecked;
 
-  const completedCount = downloads.filter((d) => d.status === 'finished').length;
-  const failedCount = downloads.filter((d) => d.status === 'error').length;
-
   const handleClearSelected = async () => {
-    const ids = downloads.filter((d) => d.checked).map((d) => d.url);
+    const ids = allDownloads.filter((d) => d.checked).map((d) => d.url);
     if (ids.length > 0) {
       await deleteDownloads('done', ids);
     }
   };
 
   const handleClearCompleted = async () => {
-    const ids = downloads.filter((d) => d.status === 'finished').map((d) => d.url);
+    const ids = allDownloads.filter((d) => d.status === 'finished').map((d) => d.url);
     if (ids.length > 0) {
       await deleteDownloads('done', ids);
     }
   };
 
   const handleClearFailed = async () => {
-    const ids = downloads.filter((d) => d.status === 'error').map((d) => d.url);
+    const ids = allDownloads.filter((d) => d.status === 'error').map((d) => d.url);
     if (ids.length > 0) {
       await deleteDownloads('done', ids);
     }
   };
 
   const handleRetryFailed = async () => {
-    const failedDownloads = downloads.filter((d) => d.status === 'error');
+    const failedDownloads = allDownloads.filter((d) => d.status === 'error');
     for (const dl of failedDownloads) {
       await addDownload(
         dl.url,
@@ -63,7 +106,7 @@ export default function CompletedDownloads() {
     }
   };
 
-  const handleRetryOne = async (dl: typeof downloads[0]) => {
+  const handleRetryOne = async (dl: typeof allDownloads[0]) => {
     await addDownload(
       dl.url,
       dl.quality,
@@ -83,7 +126,7 @@ export default function CompletedDownloads() {
   };
 
   const handleDownloadSelected = () => {
-    const selectedDownloads = downloads.filter((d) => d.status === 'finished' && d.checked);
+    const selectedDownloads = allDownloads.filter((d) => d.status === 'finished' && d.checked);
     selectedDownloads.forEach((dl) => {
       const link = document.createElement('a');
       link.href = buildDownloadLink(dl);
@@ -95,7 +138,7 @@ export default function CompletedDownloads() {
     });
   };
 
-  const buildDownloadLink = (download: typeof downloads[0]) => {
+  const buildDownloadLink = (download: typeof allDownloads[0]) => {
     const baseUrl = getApiBaseUrl();
     let baseDir = configuration.PUBLIC_HOST_URL;
     if (download.quality === 'audio' || download.filename?.endsWith('.mp3')) {
@@ -107,7 +150,7 @@ export default function CompletedDownloads() {
     return `${baseUrl}/${baseDir}${encodeURIComponent(download.filename)}`;
   };
 
-  const buildChapterDownloadLink = (download: typeof downloads[0], chapterFilename: string) => {
+  const buildChapterDownloadLink = (download: typeof allDownloads[0], chapterFilename: string) => {
     const baseUrl = getApiBaseUrl();
     let baseDir = configuration.PUBLIC_HOST_URL;
     if (download.quality === 'audio' || chapterFilename?.endsWith('.mp3')) {
@@ -124,19 +167,80 @@ export default function CompletedDownloads() {
     return parts[parts.length - 1];
   };
 
+  const handleLoadMore = () => {
+    setVisibleCount((prev) => prev + PAGE_SIZE);
+  };
+
+  const handleLoadAll = () => {
+    setVisibleCount(filteredDownloads.length);
+  };
+
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-xl overflow-hidden">
       <div className="px-6 py-4 bg-gradient-to-r from-green-500 to-green-600 dark:from-green-600 dark:to-green-700">
         <h2 className="text-xl font-semibold text-white flex items-center gap-2">
           <FileCheck className="w-5 h-5" />
           Completed
-          {downloads.length > 0 && (
+          {totalCount > 0 && (
             <span className="ml-2 px-2 py-0.5 bg-white/20 rounded-full text-sm">
-              {downloads.length}
+              {totalCount}
+            </span>
+          )}
+          {completedCount > 0 && (
+            <span className="px-2 py-0.5 bg-green-400/30 rounded-full text-sm">
+              {completedCount} done
+            </span>
+          )}
+          {failedCount > 0 && (
+            <span className="px-2 py-0.5 bg-red-400/30 rounded-full text-sm">
+              {failedCount} failed
             </span>
           )}
         </h2>
       </div>
+
+      {/* Search & Filter Bar */}
+      {totalCount > 0 && (
+        <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-700 flex flex-wrap gap-3 items-center">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setVisibleCount(PAGE_SIZE);
+              }}
+              placeholder={`Search ${totalCount} downloads...`}
+              className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <Filter className="w-4 h-4 text-gray-400" />
+            {(['all', 'finished', 'error'] as FilterMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => {
+                  setFilterMode(mode);
+                  setVisibleCount(PAGE_SIZE);
+                }}
+                className={cn(
+                  'px-3 py-1 text-xs font-medium rounded-full transition-colors',
+                  filterMode === mode
+                    ? mode === 'error'
+                      ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                      : mode === 'finished'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                    : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                )}
+              >
+                {mode === 'all' ? `All (${totalCount})` : mode === 'finished' ? `Done (${completedCount})` : `Failed (${failedCount})`}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Action buttons */}
       <div className="px-6 py-3 border-b border-gray-200 dark:border-gray-700 flex flex-wrap gap-4">
@@ -146,7 +250,7 @@ export default function CompletedDownloads() {
           className="text-sm text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
         >
           <Trash2 className="w-4 h-4" />
-          Clear selected
+          Clear selected ({checkedCount})
         </button>
         <button
           onClick={handleClearCompleted}
@@ -196,11 +300,16 @@ export default function CompletedDownloads() {
                   }}
                   onChange={(e) => setAllChecked('done', e.target.checked)}
                   className="w-4 h-4 text-blue-500 border-gray-300 rounded focus:ring-blue-500"
-                  disabled={downloads.length === 0}
+                  disabled={allDownloads.length === 0}
                 />
               </th>
               <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">
                 Video
+                {searchQuery && (
+                  <span className="ml-2 text-xs font-normal text-gray-500">
+                    ({filteredDownloads.length} results)
+                  </span>
+                )}
               </th>
               <th className="w-28 px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">
                 Size
@@ -209,17 +318,17 @@ export default function CompletedDownloads() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-            {downloads.length === 0 ? (
+            {filteredDownloads.length === 0 ? (
               <tr>
                 <td
                   colSpan={4}
                   className="px-4 py-8 text-center text-gray-500 dark:text-gray-400"
                 >
-                  No completed downloads
+                  {searchQuery ? 'No matching downloads' : 'No completed downloads'}
                 </td>
               </tr>
             ) : (
-              downloads.map((download) => (
+              visibleDownloads.map((download) => (
                 <>
                   <tr
                     key={download.url}
@@ -362,6 +471,30 @@ export default function CompletedDownloads() {
           </tbody>
         </table>
       </div>
+
+      {/* Load More */}
+      {remaining > 0 && (
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center gap-4">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
+            Showing {visibleCount} of {filteredDownloads.length}
+          </span>
+          <button
+            onClick={handleLoadMore}
+            className="px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
+          >
+            <ChevronDown className="w-4 h-4" />
+            Load {Math.min(PAGE_SIZE, remaining)} More
+          </button>
+          {remaining > PAGE_SIZE && (
+            <button
+              onClick={handleLoadAll}
+              className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 text-sm font-medium rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Load All ({remaining})
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

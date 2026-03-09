@@ -1,5 +1,6 @@
 """HTTP route handlers for Svidown."""
 
+import asyncio
 import json
 import logging
 import os
@@ -10,6 +11,7 @@ from aiohttp import web
 
 from .config import Config
 from .download_manager import DownloadManager
+from .downloader import extract_channel_info
 from .models import DownloadEncoder
 
 log = logging.getLogger("routes")
@@ -132,6 +134,38 @@ def create_routes(
         result = await manager.start_pending(ids)
 
         return json_response(result)
+
+    @routes.post(config.URL_PREFIX + "extract-channel")
+    async def extract_channel(request: web.Request) -> web.Response:
+        """Extract video list from a channel or playlist URL."""
+        try:
+            post = await request.json()
+        except json.JSONDecodeError:
+            raise web.HTTPBadRequest(reason="Invalid JSON")
+
+        url = post.get("url")
+        if not url:
+            raise web.HTTPBadRequest(reason="Missing 'url'")
+
+        limit = int(post.get("limit", 0))
+
+        log.info(f"Extracting channel/playlist: {url} limit={limit}")
+
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                extract_channel_info,
+                url,
+                config.DOWNLOAD_DIR,
+                config.TEMP_DIR,
+                limit,
+                config.YTDL_OPTIONS,
+            )
+            return json_response({"status": "ok", **result})
+        except Exception as e:
+            log.error(f"Channel extraction error: {e}")
+            return json_response({"status": "error", "msg": str(e)})
 
     @routes.get(config.URL_PREFIX + "history")
     async def get_history(request: web.Request) -> web.Response:
@@ -277,6 +311,7 @@ def setup_routes(
         return web.Response(text='{"status": "ok"}')
 
     app.router.add_route("OPTIONS", config.URL_PREFIX + "add", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "extract-channel", cors_options)
 
 
 def setup_cors(app: web.Application) -> None:

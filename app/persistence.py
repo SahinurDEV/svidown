@@ -36,46 +36,92 @@ class DownloadStore:
         self._load()
 
     def _load(self) -> None:
-        """Load data from JSON file."""
-        if not os.path.exists(self.filepath):
-            log.debug(f"Store {self.name}: No existing file found")
+        """Load data from JSON file, falling back to backup if corrupted."""
+        loaded = self._try_load_file(self.filepath)
+        if loaded is not None:
+            self._data = loaded
+            log.info(f"Store {self.name}: Loaded {len(self._data)} items")
             return
 
+        # Try backup file
+        backup_path = self.filepath + ".bak"
+        if os.path.exists(backup_path):
+            log.warning(f"Store {self.name}: Main file failed, trying backup")
+            loaded = self._try_load_file(backup_path)
+            if loaded is not None:
+                self._data = loaded
+                log.info(f"Store {self.name}: Loaded {len(self._data)} items from backup")
+                # Restore main file from backup
+                self._save()
+                return
+
+        if os.path.exists(self.filepath):
+            log.error(f"Store {self.name}: Failed to load from both main and backup")
+        else:
+            log.debug(f"Store {self.name}: No existing file found")
+
+    def _try_load_file(self, path: str) -> OrderedDict | None:
+        """Try to load data from a specific file path.
+
+        Returns:
+            OrderedDict of downloads, or None on failure
+        """
+        if not os.path.exists(path):
+            return None
+
         try:
-            with open(self.filepath, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             if not isinstance(data, list):
-                log.warning(f"Store {self.name}: Invalid format, expected list")
-                return
+                log.warning(f"Store {self.name}: Invalid format in {path}, expected list")
+                return None
 
+            result: OrderedDict[str, Download] = OrderedDict()
             for item in data:
                 try:
                     download = Download.from_dict(item)
-                    self._data[download.url] = download
+                    result[download.url] = download
                 except (KeyError, TypeError, ValueError) as e:
                     log.warning(f"Store {self.name}: Skipping invalid item: {e}")
 
             # Sort by timestamp
-            self._data = OrderedDict(
-                sorted(self._data.items(), key=lambda x: x[1].timestamp)
+            result = OrderedDict(
+                sorted(result.items(), key=lambda x: x[1].timestamp)
             )
-            log.info(f"Store {self.name}: Loaded {len(self._data)} items")
+            return result
 
         except json.JSONDecodeError as e:
-            log.error(f"Store {self.name}: JSON decode error: {e}")
+            log.error(f"Store {self.name}: JSON decode error in {path}: {e}")
+            return None
         except OSError as e:
-            log.error(f"Store {self.name}: File read error: {e}")
+            log.error(f"Store {self.name}: File read error in {path}: {e}")
+            return None
 
     def _save(self) -> None:
-        """Save data to JSON file."""
+        """Save data to JSON file atomically with backup."""
+        tmp_path = self.filepath + ".tmp"
+        backup_path = self.filepath + ".bak"
         try:
             data = [download.to_dict() for download in self._data.values()]
-            with open(self.filepath, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            # Backup current file before replacing
+            if os.path.exists(self.filepath):
+                try:
+                    os.replace(self.filepath, backup_path)
+                except OSError:
+                    pass
+            os.replace(tmp_path, self.filepath)
             log.debug(f"Store {self.name}: Saved {len(self._data)} items")
         except OSError as e:
             log.error(f"Store {self.name}: File write error: {e}")
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     async def put(self, download: Download) -> None:
         """Add or update a download."""
@@ -140,10 +186,11 @@ class DownloadStore:
         """Synchronous get (use with caution)."""
         return self._data.get(url)
 
-    def put_sync(self, download: Download) -> None:
+    def put_sync(self, download: Download, save: bool = True) -> None:
         """Synchronous put (use with caution)."""
         self._data[download.url] = download
-        self._save()
+        if save:
+            self._save()
 
     def delete_sync(self, url: str) -> bool:
         """Synchronous delete (use with caution)."""

@@ -474,6 +474,8 @@ class DownloadManager:
             if worker.is_canceled:
                 asyncio.create_task(self.notifier.canceled(download.url))
             else:
+                # Strip heavy entry data before persisting to history
+                download.entry = None
                 self.done.put_sync(download)
                 asyncio.create_task(self.notifier.completed(download))
 

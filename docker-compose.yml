@@ -1,12 +1,17 @@
 services:
   svidown:
+    build: .
     image: sahinurdev/svidown:latest
-    # build: .  # Uncomment to build from source
     container_name: svidown
     restart: unless-stopped
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
     environment:
       - PORT=${PORT:-3000}
+      # Browser cookies - required for Instagram, fixes YouTube datacenter blocks
+      # Export from browser with "Get cookies.txt LOCALLY" extension
+      # Save to ./cookies/cookies.txt then restart
+      - YTDL_OPTIONS={"cookiefile":"/cookies/cookies.txt"}
     volumes:
       - ./downloads:/downloads
+      - ./cookies:/cookies

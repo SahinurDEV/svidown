@@ -71,4 +71,20 @@ export interface YtdlOptionsUpdate {
   update_time?: number;
 }
 
+export interface ChannelEntry {
+  id: string;
+  title: string;
+  url: string;
+  duration?: number;
+  thumbnail?: string;
+}
+
+export interface ChannelResult {
+  status: 'ok' | 'error';
+  title?: string;
+  channel?: string;
+  entries?: ChannelEntry[];
+  msg?: string;
+}
+
 export type State = 'queue' | 'done';

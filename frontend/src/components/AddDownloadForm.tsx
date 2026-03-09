@@ -6,6 +6,7 @@ import { Formats, isAudioFormat } from '@/data/formats';
 import { SpeedLimits } from '@/data/speedLimits';
 import { detectPlatform, FeaturedPlatforms } from '@/data/platforms';
 import { getCookie, setCookie } from '@/lib/utils';
+import { ChannelEntry } from '@/types';
 import {
   Download,
   ChevronDown,
@@ -19,6 +20,9 @@ import {
   Globe,
   CheckCircle,
   AlertCircle,
+  Users,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 
 interface BatchImportModalProps {
@@ -104,12 +108,254 @@ function BatchImportModal({
   );
 }
 
+function formatDuration(seconds?: number): string {
+  if (!seconds) return '';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+interface ChannelDownloadModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onDownload: (urls: string[]) => void;
+  extractChannel: (url: string, limit?: number) => Promise<any>;
+  downloadInProgress: boolean;
+  downloadStatus: string;
+  onCancelDownload: () => void;
+}
+
+function ChannelDownloadModal({
+  isOpen,
+  onClose,
+  onDownload,
+  extractChannel,
+  downloadInProgress,
+  downloadStatus,
+  onCancelDownload,
+}: ChannelDownloadModalProps) {
+  const [channelUrl, setChannelUrl] = useState('');
+  const [entries, setEntries] = useState<ChannelEntry[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [channelTitle, setChannelTitle] = useState('');
+  const [extracting, setExtracting] = useState(false);
+  const [error, setError] = useState('');
+  const [limit, setLimit] = useState<number | ''>('');
+
+  if (!isOpen) return null;
+
+  const handleExtract = async () => {
+    if (!channelUrl.trim()) return;
+    setExtracting(true);
+    setError('');
+    setEntries([]);
+    setSelected(new Set());
+    setChannelTitle('');
+
+    const result = await extractChannel(channelUrl.trim(), typeof limit === 'number' ? limit : 0);
+
+    if (result.status === 'error') {
+      setError(result.msg || 'Failed to extract channel');
+    } else {
+      const videoEntries = result.entries || [];
+      setEntries(videoEntries);
+      setChannelTitle(result.channel || result.title || '');
+      setSelected(new Set(videoEntries.map((e: ChannelEntry) => e.url)));
+    }
+    setExtracting(false);
+  };
+
+  const toggleSelect = (url: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === entries.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(entries.map((e) => e.url)));
+    }
+  };
+
+  const handleDownload = () => {
+    const urls = entries.filter((e) => selected.has(e.url)).map((e) => e.url);
+    if (urls.length === 0) return;
+    onDownload(urls);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col">
+        <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-xl font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+            <Users className="w-5 h-5" />
+            Bulk Channel/Playlist Download
+          </h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Paste a YouTube channel, playlist, or profile URL to download all videos
+          </p>
+        </div>
+
+        <div className="p-6 space-y-4 flex-1 overflow-hidden flex flex-col">
+          {/* URL Input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={channelUrl}
+              onChange={(e) => setChannelUrl(e.target.value)}
+              placeholder="https://youtube.com/@channel or playlist URL..."
+              disabled={extracting || downloadInProgress}
+              className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
+              onKeyDown={(e) => e.key === 'Enter' && handleExtract()}
+            />
+            <input
+              type="number"
+              min="0"
+              value={limit}
+              onChange={(e) => setLimit(e.target.value ? parseInt(e.target.value) : '')}
+              placeholder="Limit"
+              disabled={extracting || downloadInProgress}
+              className="w-20 px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 text-sm"
+              title="Max videos (0 = all)"
+            />
+            <button
+              onClick={handleExtract}
+              disabled={extracting || !channelUrl.trim() || downloadInProgress}
+              className="px-5 py-2.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2 whitespace-nowrap"
+            >
+              {extracting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Extracting...
+                </>
+              ) : (
+                'Fetch Videos'
+              )}
+            </button>
+          </div>
+
+          {error && (
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-300">
+              {error}
+            </div>
+          )}
+
+          {/* Channel Info & Video List */}
+          {entries.length > 0 && (
+            <>
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {channelTitle && <span className="font-semibold">{channelTitle}</span>}
+                    {' — '}{entries.length} video{entries.length !== 1 ? 's' : ''} found
+                  </span>
+                </div>
+                <button
+                  onClick={toggleAll}
+                  className="text-sm text-blue-500 hover:text-blue-600 flex items-center gap-1"
+                >
+                  {selected.size === entries.length ? (
+                    <><CheckSquare className="w-4 h-4" /> Deselect All</>
+                  ) : (
+                    <><Square className="w-4 h-4" /> Select All ({entries.length})</>
+                  )}
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg divide-y divide-gray-100 dark:divide-gray-700">
+                {entries.map((entry, idx) => (
+                  <label
+                    key={entry.url || idx}
+                    className={`flex items-center gap-3 p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors ${
+                      selected.has(entry.url) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(entry.url)}
+                      onChange={() => toggleSelect(entry.url)}
+                      disabled={downloadInProgress}
+                      className="w-4 h-4 text-blue-500 border-gray-300 rounded focus:ring-blue-500 flex-shrink-0"
+                    />
+                    <span className="text-xs text-gray-400 dark:text-gray-500 w-8 text-right flex-shrink-0">
+                      {idx + 1}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-900 dark:text-white truncate">
+                        {entry.title || entry.id || 'Untitled'}
+                      </p>
+                    </div>
+                    {entry.duration != null && entry.duration > 0 && (
+                      <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+                        {formatDuration(entry.duration)}
+                      </span>
+                    )}
+                  </label>
+                ))}
+              </div>
+
+              {downloadStatus && (
+                <p className="text-sm text-gray-600 dark:text-gray-400">{downloadStatus}</p>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-between">
+          {downloadInProgress && (
+            <button
+              onClick={onCancelDownload}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+          <div className="flex gap-3 ml-auto">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Close
+            </button>
+            {entries.length > 0 && (
+              <button
+                onClick={handleDownload}
+                disabled={selected.size === 0 || downloadInProgress}
+                className="px-6 py-2 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+              >
+                {downloadInProgress ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Downloading...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Download {selected.size} Video{selected.size !== 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AddDownloadForm() {
-  const { addDownload, loading, configuration, customDirs, queue, done } = useDownloads();
+  const { addDownload, extractChannel, loading, configuration, customDirs, queue, done } = useDownloads();
 
   const [url, setUrl] = useState('');
-  const [format, setFormat] = useState('any');
-  const [quality, setQuality] = useState('best');
+  const [format, setFormat] = useState('mp4');
+  const [quality, setQuality] = useState('2160');
   const [speedLimit, setSpeedLimit] = useState<string>('unlimited');
   const [folder, setFolder] = useState('');
   const [customNamePrefix, setCustomNamePrefix] = useState('');
@@ -125,6 +371,12 @@ export default function AddDownloadForm() {
   const [batchStatus, setBatchStatus] = useState('');
   const [batchInProgress, setBatchInProgress] = useState(false);
   const [cancelBatchFlag, setCancelBatchFlag] = useState(false);
+
+  // Channel/bulk download state
+  const [channelModalOpen, setChannelModalOpen] = useState(false);
+  const [channelDownloadStatus, setChannelDownloadStatus] = useState('');
+  const [channelDownloadInProgress, setChannelDownloadInProgress] = useState(false);
+  const [cancelChannelFlag, setCancelChannelFlag] = useState(false);
 
   const selectedFormat = Formats.find((f) => f.id === format) || Formats[0];
   const qualities = selectedFormat.qualities;
@@ -274,6 +526,44 @@ export default function AddDownloadForm() {
     setBatchInProgress(false);
   };
 
+  const handleChannelDownload = async (urls: string[]) => {
+    setChannelDownloadInProgress(true);
+    setCancelChannelFlag(false);
+    setChannelDownloadStatus(`Starting to download ${urls.length} videos...`);
+
+    for (let i = 0; i < urls.length; i++) {
+      if (cancelChannelFlag) {
+        setChannelDownloadStatus(`Cancelled after ${i} of ${urls.length} videos.`);
+        setChannelDownloadInProgress(false);
+        return;
+      }
+
+      setChannelDownloadStatus(`Adding video ${i + 1} of ${urls.length}...`);
+
+      const result = await addDownload(
+        urls[i],
+        quality,
+        format,
+        folder || undefined,
+        customNamePrefix,
+        typeof playlistItemLimit === 'number' ? playlistItemLimit : undefined,
+        autoStart,
+        splitByChapters,
+        chapterTemplate,
+        getSpeedLimitValue()
+      );
+
+      if (result.status === 'error') {
+        console.error(`Error adding ${urls[i]}: ${result.msg}`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+
+    setChannelDownloadStatus(`All ${urls.length} videos added to queue!`);
+    setChannelDownloadInProgress(false);
+  };
+
   const exportUrls = () => {
     const urls = [
       ...Array.from(queue.values()).map((dl) => dl.url),
@@ -340,7 +630,7 @@ export default function AddDownloadForm() {
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="Paste video or playlist URL here..."
+                placeholder="Paste video, playlist or channel URL here..."
                 disabled={addInProgress || loading}
                 className="w-full px-4 py-3 text-lg border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 transition-all pr-24"
               />
@@ -371,6 +661,16 @@ export default function AddDownloadForm() {
                   Download
                 </>
               )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setChannelModalOpen(true)}
+              disabled={loading}
+              className="px-5 py-3 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+              title="Download all videos from a channel or playlist"
+            >
+              <Users className="w-5 h-5" />
+              Bulk
             </button>
           </div>
 
@@ -621,6 +921,16 @@ export default function AddDownloadForm() {
         status={batchStatus}
         inProgress={batchInProgress}
         onCancel={() => setCancelBatchFlag(true)}
+      />
+
+      <ChannelDownloadModal
+        isOpen={channelModalOpen}
+        onClose={() => setChannelModalOpen(false)}
+        onDownload={handleChannelDownload}
+        extractChannel={extractChannel}
+        downloadInProgress={channelDownloadInProgress}
+        downloadStatus={channelDownloadStatus}
+        onCancelDownload={() => setCancelChannelFlag(true)}
       />
     </>
   );

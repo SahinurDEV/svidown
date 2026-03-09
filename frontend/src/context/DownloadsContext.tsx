@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Download, Configuration, CustomDirs, Status, State, YtdlOptionsUpdate } from '@/types';
+import { Download, Configuration, CustomDirs, Status, State, YtdlOptionsUpdate, ChannelResult } from '@/types';
 import { getApiBaseUrl } from '@/lib/utils';
 
 interface DownloadsContextType {
@@ -26,6 +26,7 @@ interface DownloadsContextType {
   ) => Promise<Status>;
   deleteDownloads: (where: State, ids: string[]) => Promise<void>;
   startDownloads: (ids: string[]) => Promise<void>;
+  extractChannel: (url: string, limit?: number) => Promise<ChannelResult>;
   toggleChecked: (where: State, id: string) => void;
   setAllChecked: (where: State, checked: boolean) => void;
 }
@@ -239,6 +240,23 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const extractChannel = useCallback(
+    async (url: string, limit?: number): Promise<ChannelResult> => {
+      const baseUrl = getApiBaseUrl();
+      try {
+        const response = await fetch(`${baseUrl}/extract-channel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, limit: limit || 0 }),
+        });
+        return await response.json();
+      } catch (error) {
+        return { status: 'error', msg: String(error) };
+      }
+    },
+    []
+  );
+
   const toggleChecked = useCallback((where: State, id: string) => {
     if (where === 'queue') {
       setQueue((prev) => {
@@ -291,6 +309,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         customDirs,
         ytdlOptionsUpdateTime,
         addDownload,
+        extractChannel,
         deleteDownloads,
         startDownloads,
         toggleChecked,

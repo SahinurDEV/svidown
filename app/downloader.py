@@ -401,3 +401,107 @@ def extract_info(
     }
 
     return yt_dlp.YoutubeDL(params=params).extract_info(url, download=False)
+
+
+def extract_channel_info(
+    url: str,
+    download_dir: str,
+    temp_dir: str,
+    limit: int = 0,
+    ytdl_opts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract all video entries from a channel/playlist URL.
+
+    Args:
+        url: Channel or playlist URL
+        download_dir: Download directory
+        temp_dir: Temporary directory
+        limit: Max number of entries (0 = unlimited)
+        ytdl_opts: Additional yt-dlp options
+
+    Returns:
+        Dict with channel title and list of video entries
+    """
+    debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
+    opts = ytdl_opts or {}
+
+    if "impersonate" in opts:
+        opts = opts.copy()
+        opts["impersonate"] = yt_dlp.networking.impersonate.ImpersonateTarget.from_str(
+            opts["impersonate"]
+        )
+
+    params = {
+        "quiet": not debug_logging,
+        "verbose": debug_logging,
+        "no_color": True,
+        "extract_flat": True,
+        "ignore_no_formats_error": True,
+        "paths": {"home": download_dir, "temp": temp_dir},
+        **opts,
+    }
+
+    if limit > 0:
+        params["playlistend"] = limit
+
+    ydl = yt_dlp.YoutubeDL(params=params)
+
+    # For YouTube channel URLs without a specific tab, default to /videos
+    import re as _re
+    channel_pattern = _re.compile(
+        r'youtube\.com/(@[\w.-]+|channel/[\w-]+|c/[\w.-]+|user/[\w.-]+)/?$'
+    )
+    if channel_pattern.search(url):
+        url = url.rstrip('/') + '/videos'
+
+    info = ydl.extract_info(url, download=False)
+    if not info:
+        return {"title": "", "entries": []}
+
+    # Single video, not a channel/playlist
+    if info.get("_type") not in ("playlist", "multi_video"):
+        return {
+            "title": info.get("title", ""),
+            "entries": [{
+                "id": info.get("id", ""),
+                "title": info.get("title", ""),
+                "url": info.get("webpage_url") or info.get("url") or url,
+                "duration": info.get("duration"),
+                "thumbnail": info.get("thumbnail"),
+            }],
+        }
+
+    # Flatten nested playlists (channel tabs return sub-playlists)
+    entries = []
+    for entry in (info.get("entries") or []):
+        if entry is None:
+            continue
+        # Skip sub-playlist entries (like "Videos", "Shorts", "Live" tabs)
+        entry_type = entry.get("_type", "video")
+        if entry_type == "playlist":
+            # Recursively extract from sub-playlist
+            sub_entries = entry.get("entries") or []
+            for sub in sub_entries:
+                if sub is None:
+                    continue
+                entries.append({
+                    "id": sub.get("id", ""),
+                    "title": sub.get("title", ""),
+                    "url": sub.get("webpage_url") or sub.get("url", ""),
+                    "duration": sub.get("duration"),
+                    "thumbnail": sub.get("thumbnail"),
+                })
+        else:
+            entries.append({
+                "id": entry.get("id", ""),
+                "title": entry.get("title", ""),
+                "url": entry.get("webpage_url") or entry.get("url", ""),
+                "duration": entry.get("duration"),
+                "thumbnail": entry.get("thumbnail"),
+            })
+
+    return {
+        "title": info.get("title", ""),
+        "channel": info.get("channel") or info.get("uploader", ""),
+        "entries": entries,
+    }
