@@ -6,7 +6,8 @@ import { Formats, isAudioFormat } from '@/data/formats';
 import { SpeedLimits } from '@/data/speedLimits';
 import { detectPlatform, FeaturedPlatforms } from '@/data/platforms';
 import { getCookie, setCookie } from '@/lib/utils';
-import { ChannelEntry } from '@/types';
+import { ChannelEntry, PreviewResult } from '@/types';
+import { formatFileSize } from '@/lib/utils';
 import {
   Download,
   ChevronDown,
@@ -23,6 +24,10 @@ import {
   Users,
   CheckSquare,
   Square,
+  Eye,
+  Clapperboard,
+  Subtitles,
+  ClipboardPaste,
 } from 'lucide-react';
 
 interface BatchImportModalProps {
@@ -351,7 +356,7 @@ function ChannelDownloadModal({
 }
 
 export default function AddDownloadForm() {
-  const { addDownload, extractChannel, loading, configuration, customDirs, queue, done } = useDownloads();
+  const { addDownload, previewUrl, extractChannel, loading, configuration, customDirs, queue, done, autoSaveToDevice, setAutoSaveToDevice } = useDownloads();
 
   const [url, setUrl] = useState('');
   const [format, setFormat] = useState('mp4');
@@ -377,6 +382,15 @@ export default function AddDownloadForm() {
   const [channelDownloadStatus, setChannelDownloadStatus] = useState('');
   const [channelDownloadInProgress, setChannelDownloadInProgress] = useState(false);
   const [cancelChannelFlag, setCancelChannelFlag] = useState(false);
+
+  // UX: clipboard, preview, subs, clip
+  const [clipboardUrl, setClipboardUrl] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [subtitleLangs, setSubtitleLangs] = useState('');
+  const [clipStart, setClipStart] = useState('');
+  const [clipEnd, setClipEnd] = useState('');
+  const [selectedPlaylistUrls, setSelectedPlaylistUrls] = useState<Set<string>>(new Set());
 
   const selectedFormat = Formats.find((f) => f.id === format) || Formats[0];
   const qualities = selectedFormat.qualities;
@@ -407,6 +421,31 @@ export default function AddDownloadForm() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // Clipboard link detection on open
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!navigator.clipboard?.readText) return;
+        const text = (await navigator.clipboard.readText()).trim();
+        if (cancelled || !text) return;
+        const m = text.match(/https?:\/\/[^\s]+/i);
+        if (!m) return;
+        const link = m[0];
+        // Ignore if already in the input or looks like our own origin
+        if (url.trim()) return;
+        if (link.includes(window.location.host)) return;
+        setClipboardUrl(link);
+      } catch {
+        /* permission denied — ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load preferences from cookies
@@ -471,6 +510,61 @@ export default function AddDownloadForm() {
     setCookie('svidown_chapter_template', value);
   };
 
+
+  const buildClipSection = (): string | undefined => {
+    const s = clipStart.trim();
+    const e = clipEnd.trim();
+    if (!s && !e) return undefined;
+    if (s && e) return `*${s}-${e}`;
+    if (s) return `*${s}-inf`;
+    return `*0:00-${e}`;
+  };
+
+  const downloadOptions = () => ({
+    subtitleLangs: subtitleLangs.trim() || undefined,
+    downloadSections: buildClipSection(),
+    selectedPlaylistUrls:
+      selectedPlaylistUrls.size > 0 ? Array.from(selectedPlaylistUrls) : undefined,
+  });
+
+  const handlePreview = async () => {
+    if (!url.trim()) return;
+    setPreviewLoading(true);
+    setPreview(null);
+    const result = await previewUrl(url.trim());
+    setPreview(result);
+    if (result.status === 'ok' && result.type === 'playlist' && result.entries) {
+      setSelectedPlaylistUrls(new Set(result.entries.map((e) => e.url).filter(Boolean)));
+    }
+    setPreviewLoading(false);
+  };
+
+  const handleClipboardDownload = async () => {
+    if (!clipboardUrl) return;
+    setUrl(clipboardUrl);
+    setClipboardUrl(null);
+    setAddInProgress(true);
+    const result = await addDownload(
+      clipboardUrl,
+      quality,
+      format,
+      folder || undefined,
+      customNamePrefix,
+      typeof playlistItemLimit === 'number' ? playlistItemLimit : undefined,
+      autoStart,
+      splitByChapters,
+      chapterTemplate,
+      getSpeedLimitValue(),
+      downloadOptions()
+    );
+    if (result.status === 'error') {
+      alert(`Error: ${result.msg}`);
+    } else {
+      setUrl('');
+    }
+    setAddInProgress(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
@@ -480,9 +574,40 @@ export default function AddDownloadForm() {
       return;
     }
 
+    // Multiple links pasted at once (one per line)
+    const lines = url
+      .split(/\r?\n/)
+      .map((u) => u.trim())
+      .filter((u) => /^https?:\/\//i.test(u));
+    if (lines.length > 1) {
+      setAddInProgress(true);
+      for (const line of lines) {
+        const result = await addDownload(
+          line,
+          quality,
+          format,
+          folder || undefined,
+          customNamePrefix,
+          typeof playlistItemLimit === 'number' ? playlistItemLimit : undefined,
+          autoStart,
+          splitByChapters,
+          chapterTemplate,
+          getSpeedLimitValue(),
+          downloadOptions()
+        );
+        if (result.status === 'error') {
+          console.error(result.msg);
+        }
+      }
+      setUrl('');
+      setPreview(null);
+      setAddInProgress(false);
+      return;
+    }
+
     setAddInProgress(true);
     const result = await addDownload(
-      url,
+      url.trim(),
       quality,
       format,
       folder || undefined,
@@ -491,13 +616,16 @@ export default function AddDownloadForm() {
       autoStart,
       splitByChapters,
       chapterTemplate,
-      getSpeedLimitValue()
+      getSpeedLimitValue(),
+      downloadOptions()
     );
 
     if (result.status === 'error') {
       alert(`Error adding URL: ${result.msg}`);
     } else {
       setUrl('');
+      setPreview(null);
+      setSelectedPlaylistUrls(new Set());
     }
     setAddInProgress(false);
   };
@@ -639,18 +767,60 @@ export default function AddDownloadForm() {
             </span>
           </div>
 
+          {/* Clipboard suggestion */}
+          {clipboardUrl && (
+            <div
+              className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3 p-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800"
+              data-testid="clipboard-suggest"
+            >
+              <div className="flex items-start gap-2 flex-1 min-w-0">
+                <ClipboardPaste className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-blue-900 dark:text-blue-100">Link found on clipboard</p>
+                  <p className="text-xs text-blue-700 dark:text-blue-300 truncate" title={clipboardUrl}>{clipboardUrl}</p>
+                </div>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => { setUrl(clipboardUrl); setClipboardUrl(null); }}
+                  className="px-3 py-1.5 text-sm border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-100"
+                >
+                  Use
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClipboardDownload}
+                  disabled={addInProgress}
+                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1"
+                  data-testid="clipboard-download"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClipboardUrl(null)}
+                  className="px-3 py-1.5 text-sm text-gray-500"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Main URL Input */}
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
             <div className="flex-1 relative">
-              <input
-                type="text"
+              <textarea
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="Paste video, playlist or channel URL here..."
+                placeholder="Paste video, playlist or channel URL here (one per line for multiple)..."
+                rows={2}
                 data-testid="url-input"
                 disabled={addInProgress || loading}
-                className="w-full px-4 py-3 text-lg border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 transition-all pr-24"
-              />
+                className="w-full px-4 py-3 text-lg border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 transition-all pr-24 resize-y"
+              ></textarea>
               {url && detectedPlatform && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
                   <span className={`text-lg ${detectedPlatform.color}`}>
@@ -663,9 +833,20 @@ export default function AddDownloadForm() {
               )}
             </div>
             <button
+              type="button"
+              onClick={handlePreview}
+              disabled={previewLoading || addInProgress || loading || !url.trim()}
+              className="px-5 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-semibold rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+              data-testid="preview-btn"
+            >
+              {previewLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Eye className="w-5 h-5" />}
+              Preview
+            </button>
+            <button
               type="submit"
               disabled={addInProgress || loading || !url.trim()}
               className="px-8 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 disabled:from-blue-400 disabled:to-blue-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 min-w-[140px]"
+              data-testid="download-btn"
             >
               {addInProgress ? (
                 <>
@@ -711,6 +892,148 @@ export default function AddDownloadForm() {
               )}
             </div>
           )}
+
+
+          {/* Preview card */}
+          {preview && (
+            <div className="mb-4 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden" data-testid="preview-panel">
+              {preview.status === 'error' ? (
+                <div className="p-4 text-sm text-red-600" data-testid="preview-error">{preview.msg}</div>
+              ) : (
+                <div className="p-4 flex flex-col sm:flex-row gap-4">
+                  {preview.thumbnail && (
+                    <img
+                      src={preview.thumbnail}
+                      alt=""
+                      className="w-full sm:w-48 h-28 object-cover rounded-lg bg-gray-100"
+                      data-testid="preview-thumb"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-gray-900 dark:text-white truncate" data-testid="preview-title">
+                      {preview.title}
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      {preview.type === 'playlist'
+                        ? `Playlist · ${preview.entry_count ?? preview.entries?.length ?? 0} items`
+                        : (
+                          <>
+                            {preview.duration != null && (
+                              <span data-testid="preview-duration">
+                                {Math.floor(preview.duration / 60)}:{String(Math.floor(preview.duration % 60)).padStart(2, '0')}
+                              </span>
+                            )}
+                            {preview.uploader && <span> · {preview.uploader}</span>}
+                          </>
+                        )}
+                    </p>
+                    {preview.qualities && preview.qualities.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2" data-testid="preview-qualities">
+                        {preview.qualities.map((q) => (
+                          <button
+                            key={q.quality}
+                            type="button"
+                            onClick={() => {
+                              if (q.quality === 'mp3') {
+                                handleFormatChange('mp3');
+                                handleQualityChange('best');
+                              } else {
+                                handleFormatChange('mp4');
+                                const h = q.quality.replace('p', '');
+                                handleQualityChange(h === 'best' ? 'best' : h);
+                              }
+                            }}
+                            className="px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-blue-100"
+                          >
+                            {q.quality}
+                            {q.filesize ? ` · ${formatFileSize(q.filesize)}` : ''}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {preview.type === 'playlist' && preview.entries && (
+                      <div className="mt-3 max-h-48 overflow-y-auto border border-gray-100 dark:border-gray-700 rounded-lg" data-testid="playlist-picker">
+                        {preview.entries.map((e) => (
+                          <label key={e.url || e.id} className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedPlaylistUrls.has(e.url)}
+                              onChange={() => {
+                                setSelectedPlaylistUrls((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(e.url)) next.delete(e.url);
+                                  else next.add(e.url);
+                                  return next;
+                                });
+                              }}
+                            />
+                            <span className="truncate">{e.title}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {preview.subtitles && preview.subtitles.length > 0 && (
+                      <p className="mt-2 text-xs text-gray-500">
+                        Subs available: {preview.subtitles.slice(0, 8).map((s) => s.lang).join(', ')}
+                        {preview.subtitles.length > 8 ? '…' : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Subtitles + clip + auto-save */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600 dark:text-gray-300 flex items-center gap-1">
+                <Subtitles className="w-4 h-4" /> Subtitles (langs)
+              </span>
+              <input
+                type="text"
+                value={subtitleLangs}
+                onChange={(e) => setSubtitleLangs(e.target.value)}
+                placeholder="e.g. en,es or all"
+                data-testid="subtitle-langs"
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600 dark:text-gray-300 flex items-center gap-1">
+                <Clapperboard className="w-4 h-4" /> Clip start
+              </span>
+              <input
+                type="text"
+                value={clipStart}
+                onChange={(e) => setClipStart(e.target.value)}
+                placeholder="0:00"
+                data-testid="clip-start"
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-gray-600 dark:text-gray-300">Clip end</span>
+              <input
+                type="text"
+                value={clipEnd}
+                onChange={(e) => setClipEnd(e.target.value)}
+                placeholder="1:00"
+                data-testid="clip-end"
+                className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+              />
+            </label>
+          </div>
+          <label className="flex items-center gap-2 mb-4 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              type="checkbox"
+              checked={autoSaveToDevice}
+              onChange={(e) => setAutoSaveToDevice(e.target.checked)}
+              data-testid="auto-save-toggle"
+              className="w-4 h-4 text-blue-500 rounded"
+            />
+            Auto-save finished files to this device
+          </label>
 
           {/* Quick quality / format presets */}
           <div className="flex flex-wrap gap-2 mb-4" data-testid="quality-presets">

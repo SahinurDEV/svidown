@@ -14,7 +14,10 @@ import {
   ChevronDown,
   Search,
   Filter,
+  Play,
+  X,
 } from 'lucide-react';
+import type { Download as DownloadType } from '@/types';
 
 const PAGE_SIZE = 50;
 
@@ -27,6 +30,7 @@ export default function CompletedDownloads() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
+  const [playing, setPlaying] = useState<DownloadType | null>(null);
 
   const allDownloads = useMemo(() => Array.from(done.values()), [done]);
 
@@ -190,6 +194,7 @@ export default function CompletedDownloads() {
                 setVisibleCount(PAGE_SIZE);
               }}
               placeholder={`Search ${totalCount} downloads...`}
+              data-testid="history-search"
               className="w-full pl-9 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
@@ -374,12 +379,23 @@ export default function CompletedDownloads() {
                             <RotateCcw className="w-4 h-4" />
                           </button>
                         )}
+                        {download.status === 'finished' && download.filename && (
+                          <button
+                            onClick={() => setPlaying(download)}
+                            className="p-1.5 text-gray-500 hover:text-blue-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                            title="Play in app"
+                            data-testid="play-in-app"
+                          >
+                            <Play className="w-4 h-4" />
+                          </button>
+                        )}
                         {download.filename && (
                           <a
                             href={buildDownloadLink(download)}
                             download
                             className="p-1.5 text-gray-500 hover:text-green-500 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
                             title="Download file"
+                            data-testid="save-to-device"
                           >
                             <Download className="w-4 h-4" />
                           </a>
@@ -471,6 +487,40 @@ export default function CompletedDownloads() {
               Load All ({remaining})
             </button>
           )}
+        </div>
+      )}
+
+      {playing && playing.filename && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4"
+          data-testid="video-player-modal"
+          onClick={() => setPlaying(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl max-w-3xl w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+              <h3 className="text-sm font-medium text-gray-900 dark:text-white truncate pr-4">
+                {playing.title}
+              </h3>
+              <button
+                onClick={() => setPlaying(null)}
+                className="p-1 text-gray-500 hover:text-red-500"
+                data-testid="close-player"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <video
+              key={playing.url}
+              src={buildDownloadLink(playing)}
+              controls
+              autoPlay
+              className="w-full max-h-[70vh] bg-black"
+              data-testid="in-app-video"
+            />
+          </div>
         </div>
       )}
     </div>

@@ -80,6 +80,15 @@ def create_routes(
         if speed_limit is not None:
             speed_limit = int(speed_limit)
 
+        subtitle_langs = post.get("subtitle_langs") or post.get("subtitles")
+        download_sections = post.get("download_sections") or post.get("clip")
+        if download_sections:
+            ds = str(download_sections).strip()
+            if ds and not ds.startswith("*"):
+                # Allow "0:30-1:00" -> "*0:30-1:00"
+                download_sections = "*" + ds
+        selected_playlist_urls = post.get("selected_playlist_urls") or post.get("selected_urls")
+
         log.info(f"Adding: {url} quality={quality} format={format}")
 
         result = await manager.add(
@@ -93,6 +102,9 @@ def create_routes(
             split_by_chapters=split_by_chapters,
             chapter_template=chapter_template,
             speed_limit=speed_limit,
+            subtitle_langs=subtitle_langs,
+            download_sections=download_sections,
+            selected_playlist_urls=selected_playlist_urls,
         )
 
         return json_response(result)
@@ -311,6 +323,32 @@ def create_routes(
         return web.json_response({"status": "ok" if st.last_ok else "error", **st.to_dict()})
 
 
+
+    @routes.post(config.URL_PREFIX + "preview")
+    async def preview(request: web.Request) -> web.Response:
+        """Preview a URL (title, thumbnail, duration, qualities, playlist entries)."""
+        try:
+            post = await request.json()
+        except json.JSONDecodeError:
+            raise web.HTTPBadRequest(reason="Invalid JSON")
+        url = post.get("url")
+        if not url:
+            raise web.HTTPBadRequest(reason="Missing 'url'")
+        result = await manager.preview(url)
+        return json_response(result)
+
+    @routes.post(config.URL_PREFIX + "pause")
+    async def pause_downloads(request: web.Request) -> web.Response:
+        try:
+            post = await request.json()
+        except json.JSONDecodeError:
+            raise web.HTTPBadRequest(reason="Invalid JSON")
+        ids = post.get("ids")
+        if not ids:
+            raise web.HTTPBadRequest(reason="Missing 'ids'")
+        result = await manager.pause(ids)
+        return json_response(result)
+
     @routes.get(config.URL_PREFIX + "health")
     async def health(request: web.Request) -> web.Response:
         """Liveness probe (no auth required)."""
@@ -452,6 +490,8 @@ def setup_routes(
     app.router.add_route("OPTIONS", config.URL_PREFIX + "cookies", cors_options)
     app.router.add_route("OPTIONS", config.URL_PREFIX + "retry", cors_options)
     app.router.add_route("OPTIONS", config.URL_PREFIX + "selftest", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "preview", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "pause", cors_options)
 
 
 def setup_cors(app: web.Application, allowed_origins: list | None = None) -> None:
