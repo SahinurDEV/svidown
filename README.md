@@ -34,6 +34,11 @@ svidown uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). Real-world success depe
 - Playlist / channel bulk support with item limits
 - Real-time progress and ETA display
 - Optional HTTP Basic / bearer-token auth
+- Cookies.txt upload in the web UI
+- Queue auto-retry with failure reasons
+- Daily self-test health banner
+- PWA install + share target (mobile)
+- Quick quality presets (1080p / 720p / MP3)
 - yt-dlp auto-update (on start + periodic)
 - Dark/Light theme support
 - Mobile-responsive design
@@ -128,6 +133,13 @@ All configuration is done via environment variables.
 | `YTDLP_UPDATE_ON_START` | Run an update when the process starts | `true` |
 | `YTDLP_UPDATE_INTERVAL_HOURS` | Periodic update interval (hours) | `24` |
 | `YTDLP_STALE_AFTER_DAYS` | UI warning if yt-dlp version date is older | `60` |
+| `AUTO_RETRY_ENABLED` | Auto-retry failed downloads | `true` |
+| `AUTO_RETRY_MAX` | Max auto-retries per item | `2` |
+| `SELFTEST_ENABLED` | Daily extract self-test | `true` |
+| `SELFTEST_ON_START` | Run self-test at startup | `true` |
+| `SELFTEST_INTERVAL_HOURS` | Self-test interval | `24` |
+| `SELFTEST_URL` | URL used for self-test | YouTube sample |
+| `COOKIES_FILE` | Netscape cookies path for UI upload | `/cookies/cookies.txt` |
 
 Set `YTDLP_AUTO_UPDATE=false` to disable. Prefer rebuilding/pulling a fresh image for reproducible deploys; auto-update keeps extractors working between rebuilds.
 

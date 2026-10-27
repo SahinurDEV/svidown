@@ -27,6 +27,7 @@ interface DownloadsContextType {
   ) => Promise<Status>;
   deleteDownloads: (where: State, ids: string[]) => Promise<void>;
   startDownloads: (ids: string[]) => Promise<void>;
+  retryDownloads: (ids: string[]) => Promise<void>;
   extractChannel: (url: string, limit?: number) => Promise<ChannelResult>;
   toggleChecked: (where: State, id: string) => void;
   setAllChecked: (where: State, checked: boolean) => void;
@@ -256,6 +257,15 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const retryDownloads = useCallback(async (ids: string[]): Promise<void> => {
+    const baseUrl = getApiBaseUrl();
+    await fetch(`${baseUrl}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ ids }),
+    });
+  }, []);
+
   const extractChannel = useCallback(
     async (url: string, limit?: number): Promise<ChannelResult> => {
       const baseUrl = getApiBaseUrl();
@@ -328,6 +338,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         extractChannel,
         deleteDownloads,
         startDownloads,
+        retryDownloads,
         toggleChecked,
         setAllChecked,
       }}

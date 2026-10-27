@@ -8,6 +8,8 @@ import {
   CompletedDownloads,
   Footer,
   YtDlpBanner,
+  HealthStatus,
+  CookiesPanel,
 } from '@/components';
 import { Loader2 } from 'lucide-react';
 
@@ -18,7 +20,7 @@ export default function Home() {
     <div className="min-h-screen flex flex-col">
       <Navbar />
 
-      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
+      <main className="flex-1 max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8 w-full">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="flex items-center gap-3 text-gray-600 dark:text-gray-400">
@@ -28,8 +30,10 @@ export default function Home() {
           </div>
         ) : (
           <>
+            <HealthStatus />
             <YtDlpBanner />
             <AddDownloadForm />
+            <CookiesPanel />
             <DownloadQueue />
             <CompletedDownloads />
           </>

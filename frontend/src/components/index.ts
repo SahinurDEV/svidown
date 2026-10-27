@@ -4,3 +4,5 @@ export { default as DownloadQueue } from './DownloadQueue';
 export { default as CompletedDownloads } from './CompletedDownloads';
 export { default as Footer } from './Footer';
 export { default as YtDlpBanner } from './YtDlpBanner';
+export { default as HealthStatus } from './HealthStatus';
+export { default as CookiesPanel } from './CookiesPanel';

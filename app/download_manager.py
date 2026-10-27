@@ -337,6 +337,7 @@ class DownloadManager:
             split_by_chapters=split_by_chapters,
             chapter_template=chapter_template,
             speed_limit=speed_limit,
+            max_retries=self.config.AUTO_RETRY_MAX,
         )
 
         # Store and start
@@ -495,10 +496,32 @@ class DownloadManager:
             if worker.is_canceled:
                 asyncio.create_task(self.notifier.canceled(download.url))
             else:
+                if download.status == DownloadStatus.ERROR:
+                    reason = download.msg or download.error or "Unknown error"
+                    download.failure_reason = reason
+                    max_r = download.max_retries if download.max_retries is not None else self.config.AUTO_RETRY_MAX
+                    if (
+                        self.config.AUTO_RETRY_ENABLED
+                        and download.retry_count < max_r
+                    ):
+                        download.retry_count += 1
+                        log.info(
+                            f"Auto-retry {download.retry_count}/{max_r} for {download.title}: {reason[:120]}"
+                        )
+                        download.status = DownloadStatus.PENDING
+                        download.msg = f"Auto-retry {download.retry_count}/{max_r} after: {reason[:200]}"
+                        download.percent = None
+                        download.speed = None
+                        download.eta = None
+                        # Keep in queue and restart
+                        self.queue.put_sync(download)
+                        asyncio.create_task(self.notifier.updated(download))
+                        asyncio.create_task(self._start_download(download, auto_start=True))
+                        return
+
                 # Strip heavy entry data before persisting to history
                 download.entry = None
                 self.done.put_sync(download)
-                # Cap / TTL prune history
                 try:
                     self.done.prune(
                         self.config.HISTORY_MAX_ITEMS,
@@ -595,6 +618,36 @@ class DownloadManager:
             await self.done.delete(url)
             await self.notifier.cleared(url)
 
+        return {"status": "ok"}
+
+
+    async def retry(self, urls: list[str]) -> dict[str, Any]:
+        """Re-queue failed downloads from done history."""
+        for url in urls:
+            download = await self.done.get(url)
+            if not download:
+                # also allow retrying from queue if error-stuck
+                download = await self.queue.get(url)
+                if not download:
+                    log.warning(f"Retry target not found: {url}")
+                    continue
+                await self.queue.delete(url)
+            else:
+                await self.done.delete(url)
+
+            download.status = DownloadStatus.PENDING
+            download.msg = None
+            download.failure_reason = download.failure_reason  # keep last reason visible until success
+            download.percent = None
+            download.speed = None
+            download.eta = None
+            download.filename = None
+            # manual retry resets counter or bumps max
+            download.retry_count = 0
+            download.max_retries = self.config.AUTO_RETRY_MAX
+            await self.queue.put(download)
+            await self.notifier.added(download)
+            asyncio.create_task(self._start_download(download, auto_start=True))
         return {"status": "ok"}
 
     async def get_all(self) -> dict[str, list[dict[str, Any]]]:

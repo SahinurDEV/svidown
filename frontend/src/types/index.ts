@@ -19,6 +19,9 @@ export interface Download {
   checked?: boolean;
   size?: number;
   error?: string;
+  failure_reason?: string;
+  retry_count?: number;
+  max_retries?: number;
   deleting?: boolean;
   chapter_files?: Array<{ filename: string; size: number }>;
 }

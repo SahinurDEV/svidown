@@ -111,6 +111,19 @@ class Config:
     TEMP_MAX_AGE_HOURS: float = 24.0
     ENABLE_IMPERSONATE: bool = True
 
+    # Cookies upload path (Netscape file written by UI)
+    COOKIES_FILE: str = ""
+
+    # Auto-retry failed downloads
+    AUTO_RETRY_ENABLED: bool = True
+    AUTO_RETRY_MAX: int = 2
+
+    # Daily self-test
+    SELFTEST_ENABLED: bool = True
+    SELFTEST_ON_START: bool = True
+    SELFTEST_INTERVAL_HOURS: float = 24.0
+    SELFTEST_URL: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+
     def __post_init__(self):
         """Apply defaults and resolve paths after initialization."""
         if not self.AUDIO_DOWNLOAD_DIR:
@@ -184,6 +197,13 @@ class Config:
             MIN_FREE_DISK_MB=int(env("MIN_FREE_DISK_MB", "512")),
             TEMP_MAX_AGE_HOURS=float(env("TEMP_MAX_AGE_HOURS", "24")),
             ENABLE_IMPERSONATE=parse_bool(env("ENABLE_IMPERSONATE", "true")),
+            COOKIES_FILE=env("COOKIES_FILE", ""),
+            AUTO_RETRY_ENABLED=parse_bool(env("AUTO_RETRY_ENABLED", "true")),
+            AUTO_RETRY_MAX=int(env("AUTO_RETRY_MAX", "2")),
+            SELFTEST_ENABLED=parse_bool(env("SELFTEST_ENABLED", "true")),
+            SELFTEST_ON_START=parse_bool(env("SELFTEST_ON_START", "true")),
+            SELFTEST_INTERVAL_HOURS=float(env("SELFTEST_INTERVAL_HOURS", "24")),
+            SELFTEST_URL=env("SELFTEST_URL", "https://www.youtube.com/watch?v=jNQXAC9IVRw"),
         )
 
         if config.AUDIO_DOWNLOAD_DIR == "%%DOWNLOAD_DIR" or not config.AUDIO_DOWNLOAD_DIR:
@@ -229,7 +249,13 @@ class Config:
             except (json.JSONDecodeError, ValueError) as e:
                 return False, f"Invalid YTDL_OPTIONS_FILE: {e}"
 
+        if not self.COOKIES_FILE:
+            self.COOKIES_FILE = os.environ.get("COOKIES_FILE", "/cookies/cookies.txt")
         self.YTDL_OPTIONS = sanitize_ytdl_options(self.YTDL_OPTIONS)
+        # If a valid cookies file exists and cookiefile not set, wire it in
+        from .cookies_util import is_valid_netscape_cookiefile
+        if "cookiefile" not in self.YTDL_OPTIONS and is_valid_netscape_cookiefile(self.COOKIES_FILE):
+            self.YTDL_OPTIONS["cookiefile"] = self.COOKIES_FILE
 
         # Default browser impersonation when curl_cffi is available and not set by user
         if self.ENABLE_IMPERSONATE and "impersonate" not in self.YTDL_OPTIONS:
@@ -272,4 +298,8 @@ class Config:
             "YTDLP_STALE_AFTER_DAYS": self.YTDLP_STALE_AFTER_DAYS,
             "HISTORY_MAX_ITEMS": self.HISTORY_MAX_ITEMS,
             "HISTORY_TTL_DAYS": self.HISTORY_TTL_DAYS,
+            "AUTO_RETRY_ENABLED": self.AUTO_RETRY_ENABLED,
+            "AUTO_RETRY_MAX": self.AUTO_RETRY_MAX,
+            "SELFTEST_ENABLED": self.SELFTEST_ENABLED,
+            "COOKIES_FILE": self.COOKIES_FILE,
         }

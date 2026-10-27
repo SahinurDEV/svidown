@@ -181,6 +181,136 @@ def create_routes(
         result = await manager.get_all()
         return json_response(result)
 
+
+    @routes.get(config.URL_PREFIX + "cookies/status")
+    async def cookies_status(request: web.Request) -> web.Response:
+        """Report whether a valid cookies file is configured."""
+        from .cookies_util import is_valid_netscape_cookiefile
+        path = config.COOKIES_FILE or "/cookies/cookies.txt"
+        valid = is_valid_netscape_cookiefile(path)
+        size = 0
+        mtime = None
+        if os.path.isfile(path):
+            try:
+                st = os.stat(path)
+                size = st.st_size
+                mtime = st.st_mtime
+            except OSError:
+                pass
+        active = bool(config.YTDL_OPTIONS.get("cookiefile"))
+        return web.json_response({
+            "path": path,
+            "valid": valid,
+            "active": active,
+            "size": size,
+            "mtime": mtime,
+        })
+
+    @routes.post(config.URL_PREFIX + "cookies")
+    async def upload_cookies(request: web.Request) -> web.Response:
+        """Upload a Netscape cookies.txt (multipart field 'file' or raw body)."""
+        from .cookies_util import is_valid_netscape_cookiefile, sanitize_ytdl_options
+        path = config.COOKIES_FILE or "/cookies/cookies.txt"
+        Path(os.path.dirname(path) or ".").mkdir(parents=True, exist_ok=True)
+
+        content_type = request.content_type or ""
+        data = b""
+        if "multipart" in content_type:
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if part is None:
+                    break
+                if part.name in ("file", "cookies", "cookiefile") or (
+                    part.filename and part.filename.endswith(".txt")
+                ):
+                    data = await part.read(decode=False)
+                    break
+        else:
+            data = await request.read()
+
+        if not data or not data.strip():
+            return json_response({"status": "error", "msg": "Empty cookies file"})
+
+        text_body = data.decode("utf-8", errors="replace")
+        tmp = path + ".upload"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text_body)
+            f.flush()
+            os.fsync(f.fileno())
+        if not is_valid_netscape_cookiefile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return json_response({
+                "status": "error",
+                "msg": "File is not a valid Netscape cookies.txt (need # Netscape header or tab-separated cookie lines)",
+            })
+        os.replace(tmp, path)
+        config.YTDL_OPTIONS["cookiefile"] = path
+        config.YTDL_OPTIONS = sanitize_ytdl_options(config.YTDL_OPTIONS)
+        log.info(f"Cookies uploaded to {path}")
+        return json_response({"status": "ok", "path": path, "active": "cookiefile" in config.YTDL_OPTIONS})
+
+    @routes.delete(config.URL_PREFIX + "cookies")
+    async def delete_cookies(request: web.Request) -> web.Response:
+        path = config.COOKIES_FILE or "/cookies/cookies.txt"
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError as e:
+            return json_response({"status": "error", "msg": str(e)})
+        config.YTDL_OPTIONS.pop("cookiefile", None)
+        return json_response({"status": "ok"})
+
+    @routes.post(config.URL_PREFIX + "retry")
+    async def retry_downloads(request: web.Request) -> web.Response:
+        try:
+            post = await request.json()
+        except json.JSONDecodeError:
+            raise web.HTTPBadRequest(reason="Invalid JSON")
+        ids = post.get("ids") or post.get("urls")
+        if not ids:
+            raise web.HTTPBadRequest(reason="Missing 'ids'")
+        result = await manager.retry(ids)
+        return json_response(result)
+
+    @routes.get(config.URL_PREFIX + "status")
+    async def app_status(request: web.Request) -> web.Response:
+        """Combined health + self-test + yt-dlp freshness for the UI alert banner."""
+        from .selftest import get_status
+        from .cookies_util import is_valid_netscape_cookiefile
+        from .ytdlp_updater import get_version_info
+        st = get_status()
+        ver = get_version_info(config.YTDLP_STALE_AFTER_DAYS)
+        path = config.COOKIES_FILE or "/cookies/cookies.txt"
+        alert = None
+        level = "ok"
+        if st.last_ok is False:
+            level = "error"
+            alert = f"Self-test failed: {st.last_msg}"
+        elif ver.get("yt_dlp_stale"):
+            level = "warn"
+            alert = f"yt-dlp is {ver.get('yt_dlp_age_days')} days old — downloads may break"
+        elif not is_valid_netscape_cookiefile(path) and not config.YTDL_OPTIONS.get("cookiefile"):
+            level = "info"
+            alert = "No cookies loaded — Instagram/fb.watch/TikTok may need a cookies.txt upload"
+        return web.json_response({
+            "level": level,
+            "alert": alert,
+            "selftest": st.to_dict(),
+            "version": ver,
+            "cookies_valid": is_valid_netscape_cookiefile(path),
+        })
+
+    @routes.post(config.URL_PREFIX + "selftest")
+    async def trigger_selftest(request: web.Request) -> web.Response:
+        from .selftest import run_selftest
+        st = await run_selftest(manager, config)
+        return web.json_response({"status": "ok" if st.last_ok else "error", **st.to_dict()})
+
+
     @routes.get(config.URL_PREFIX + "health")
     async def health(request: web.Request) -> web.Response:
         """Liveness probe (no auth required)."""
@@ -319,6 +449,9 @@ def setup_routes(
 
     app.router.add_route("OPTIONS", config.URL_PREFIX + "add", cors_options)
     app.router.add_route("OPTIONS", config.URL_PREFIX + "extract-channel", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "cookies", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "retry", cors_options)
+    app.router.add_route("OPTIONS", config.URL_PREFIX + "selftest", cors_options)
 
 
 def setup_cors(app: web.Application, allowed_origins: list | None = None) -> None:

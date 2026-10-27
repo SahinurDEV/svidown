@@ -23,6 +23,7 @@ from .download_manager import DownloadManager
 from .routes import setup_routes, setup_cors
 from .websocket import setup_websocket, start_options_watcher
 from .ytdlp_updater import ytdlp_update_loop
+from .selftest import selftest_loop
 
 log = logging.getLogger("server")
 
@@ -130,6 +131,7 @@ def create_app(config: Config | None = None) -> tuple[web.Application, DownloadM
                 run_on_start=config.YTDLP_UPDATE_ON_START,
             )
         )
+        asyncio.create_task(selftest_loop(manager, config))
 
     app.on_startup.append(on_startup)
     app["manager"] = manager
