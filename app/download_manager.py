@@ -16,6 +16,7 @@ from .models import Download, DownloadStatus
 from .persistence import DownloadStore
 from .url_safety import validate_download_url
 from .disk_guard import check_disk_space
+from .facebook_urls import resolve_facebook_url, friendly_facebook_error
 from .cookies_util import sanitize_ytdl_options
 
 log = logging.getLogger("manager")
@@ -101,6 +102,10 @@ class DownloadManager:
         if not ok:
             return {"status": "error", "msg": err}
 
+        url, fb_err = resolve_facebook_url(url)
+        if fb_err:
+            return {"status": "error", "msg": fb_err}
+
         disk_ok, disk_msg = check_disk_space(
             self.config.DOWNLOAD_DIR,
             self.config.MIN_FREE_DISK_MB,
@@ -130,7 +135,7 @@ class DownloadManager:
                 sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS)),
             )
         except yt_dlp.utils.YoutubeDLError as e:
-            return {"status": "error", "msg": str(e)}
+            return {"status": "error", "msg": friendly_facebook_error(str(e))}
 
         return await self._add_entry(
             entry=entry,

@@ -15,7 +15,7 @@ svidown uses [yt-dlp](https://github.com/yt-dlp/yt-dlp). Real-world success depe
 | Platform | Typical support | Notes |
 |----------|-----------------|-------|
 | YouTube | Good when yt-dlp is up to date | Needs recent yt-dlp + deno (bundled in Docker). Auto-update recommended. |
-| Facebook | Partial | Public videos; cookies often required from datacenter IPs. |
+| Facebook | Partial / good for public pages | `/videos/`, `/watch?v=`, `/reel/`, and `/share/v|r/` usually work. `fb.watch` short links often hit a login redirect on datacenter IPs — use cookies or paste the full facebook.com URL. Long Facebook titles are truncated in filenames. |
 | Instagram | Cookies required | Public reels/posts usually need a Netscape `cookies.txt`. Refresh when downloads start failing. |
 | Twitter / X | Cookies often required | Public tweets with video. |
 | TikTok | Unreliable without cookies | Many IPs get HTTP 403; try cookies + impersonate. |

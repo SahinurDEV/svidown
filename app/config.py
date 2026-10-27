@@ -62,7 +62,7 @@ class Config:
     PUBLIC_HOST_AUDIO_URL: str = "audio_download/"
 
     # Output templates
-    OUTPUT_TEMPLATE: str = "%(title)s.%(ext)s"
+    OUTPUT_TEMPLATE: str = "%(title).100B [%(id)s].%(ext)s"
     OUTPUT_TEMPLATE_CHAPTER: str = "%(title)s - %(section_number)02d - %(section_title)s.%(ext)s"
     OUTPUT_TEMPLATE_PLAYLIST: str = "%(playlist_title)s/%(title)s.%(ext)s"
     DEFAULT_OPTION_PLAYLIST_ITEM_LIMIT: int = 0
@@ -148,7 +148,7 @@ class Config:
             URL_PREFIX=env("URL_PREFIX", "/"),
             PUBLIC_HOST_URL=env("PUBLIC_HOST_URL", "download/"),
             PUBLIC_HOST_AUDIO_URL=env("PUBLIC_HOST_AUDIO_URL", "audio_download/"),
-            OUTPUT_TEMPLATE=env("OUTPUT_TEMPLATE", "%(title)s.%(ext)s"),
+            OUTPUT_TEMPLATE=env("OUTPUT_TEMPLATE", "%(title).100B [%(id)s].%(ext)s"),
             OUTPUT_TEMPLATE_CHAPTER=env(
                 "OUTPUT_TEMPLATE_CHAPTER",
                 "%(title)s - %(section_number)02d - %(section_title)s.%(ext)s"
