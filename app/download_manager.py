@@ -18,6 +18,8 @@ from .url_safety import validate_download_url
 from .disk_guard import check_disk_space
 from .facebook_urls import resolve_facebook_url, friendly_facebook_error
 from .cookies_util import sanitize_ytdl_options
+from .errors import friendly_error
+from .downloader import extract_preview_info
 
 log = logging.getLogger("manager")
 
@@ -74,6 +76,9 @@ class DownloadManager:
         chapter_template: str | None = None,
         speed_limit: int | None = None,
         already: set[str] | None = None,
+        subtitle_langs: str | None = None,
+        download_sections: str | None = None,
+        selected_playlist_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         """Add a new download.
 
@@ -135,7 +140,11 @@ class DownloadManager:
                 sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS)),
             )
         except yt_dlp.utils.YoutubeDLError as e:
-            return {"status": "error", "msg": friendly_facebook_error(str(e))}
+            raw = str(e)
+            msg = friendly_facebook_error(raw)
+            if msg == raw:
+                msg = friendly_error(raw)
+            return {"status": "error", "msg": msg}
 
         return await self._add_entry(
             entry=entry,
@@ -149,6 +158,9 @@ class DownloadManager:
             chapter_template=chapter_template,
             speed_limit=speed_limit,
             already=already,
+            subtitle_langs=subtitle_langs,
+            download_sections=download_sections,
+            selected_playlist_urls=selected_playlist_urls,
         )
 
     async def _add_entry(
@@ -164,6 +176,9 @@ class DownloadManager:
         chapter_template: str,
         speed_limit: int | None,
         already: set[str],
+        subtitle_langs: str | None = None,
+        download_sections: str | None = None,
+        selected_playlist_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         """Process an extracted entry."""
         if not entry:
@@ -193,6 +208,9 @@ class DownloadManager:
                 chapter_template=chapter_template,
                 speed_limit=speed_limit,
                 already=already,
+                subtitle_langs=subtitle_langs,
+                download_sections=download_sections,
+                selected_playlist_urls=selected_playlist_urls,
             )
 
         # Handle playlist
@@ -209,6 +227,9 @@ class DownloadManager:
                 chapter_template=chapter_template,
                 speed_limit=speed_limit,
                 already=already,
+                subtitle_langs=subtitle_langs,
+                download_sections=download_sections,
+                selected_playlist_urls=selected_playlist_urls,
             )
 
         # Handle video
@@ -225,6 +246,8 @@ class DownloadManager:
                 chapter_template=chapter_template,
                 speed_limit=speed_limit,
                 error=error,
+                subtitle_langs=subtitle_langs,
+                download_sections=download_sections,
             )
 
         return {"status": "error", "msg": f"Unsupported resource type: {etype}"}
@@ -242,6 +265,9 @@ class DownloadManager:
         chapter_template: str,
         speed_limit: int | None,
         already: set[str],
+        subtitle_langs: str | None = None,
+        download_sections: str | None = None,
+        selected_playlist_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         """Process a playlist entry."""
         entries = entry.get("entries", [])
@@ -256,6 +282,17 @@ class DownloadManager:
         if playlist_item_limit > 0:
             entries = entries[:playlist_item_limit]
             log.info(f"Limited to {playlist_item_limit} entries")
+
+        if selected_playlist_urls:
+            wanted = set(selected_playlist_urls)
+            filtered = []
+            for item in entries:
+                u = (item or {}).get("webpage_url") or (item or {}).get("url") or ""
+                if u in wanted or any(w in u or u in w for w in wanted if u):
+                    filtered.append(item)
+            if filtered:
+                entries = filtered
+                log.info(f"Filtered to {len(entries)} selected playlist items")
 
         playlist_index_digits = len(str(len(entries)))
         results = []
@@ -282,6 +319,9 @@ class DownloadManager:
                 chapter_template=chapter_template,
                 speed_limit=speed_limit,
                 already=already,
+                subtitle_langs=subtitle_langs,
+                download_sections=download_sections,
+                selected_playlist_urls=None,
             )
             results.append(result)
 
@@ -305,6 +345,8 @@ class DownloadManager:
         chapter_template: str,
         speed_limit: int | None,
         error: str | None,
+        subtitle_langs: str | None = None,
+        download_sections: str | None = None,
     ) -> dict[str, Any]:
         """Process a video entry."""
         url = entry.get("webpage_url") or entry.get("url")
@@ -323,6 +365,12 @@ class DownloadManager:
         entry = self._convert_generators(entry)
 
         # Create download object
+        thumb = entry.get("thumbnail")
+        if not thumb:
+            thumbs = entry.get("thumbnails") or []
+            if thumbs:
+                thumb = thumbs[-1].get("url") if isinstance(thumbs[-1], dict) else None
+
         download = Download(
             id=entry.get("id", ""),
             url=url,
@@ -338,6 +386,10 @@ class DownloadManager:
             chapter_template=chapter_template,
             speed_limit=speed_limit,
             max_retries=self.config.AUTO_RETRY_MAX,
+            subtitle_langs=subtitle_langs,
+            download_sections=download_sections,
+            thumbnail=thumb,
+            duration=entry.get("duration"),
         )
 
         # Store and start
@@ -478,10 +530,12 @@ class DownloadManager:
         worker: DownloadWorker,
     ) -> None:
         """Clean up after download completion."""
-        # Handle failed downloads
-        if download.status != DownloadStatus.FINISHED:
+        is_paused = getattr(worker, "is_paused", False)
+
+        # Handle failed downloads (keep partials when pausing so resume can continue)
+        if download.status != DownloadStatus.FINISHED and not is_paused:
             worker.cleanup_temp_file()
-            if download.status != DownloadStatus.ERROR:
+            if download.status != DownloadStatus.ERROR and not worker.is_canceled:
                 download.status = DownloadStatus.ERROR
 
         worker.cleanup()
@@ -493,12 +547,20 @@ class DownloadManager:
         if self.queue.exists_sync(download.url):
             self.queue.delete_sync(download.url)
 
-            if worker.is_canceled:
+            if is_paused:
+                download.status = DownloadStatus.PAUSED
+                download.msg = "Paused"
+                download.speed = None
+                download.eta = None
+                self.pending.put_sync(download)
+                asyncio.create_task(self.notifier.updated(download))
+            elif worker.is_canceled:
                 asyncio.create_task(self.notifier.canceled(download.url))
             else:
                 if download.status == DownloadStatus.ERROR:
-                    reason = download.msg or download.error or "Unknown error"
+                    reason = friendly_error(download.msg or download.error or "Unknown error")
                     download.failure_reason = reason
+                    download.msg = reason
                     max_r = download.max_retries if download.max_retries is not None else self.config.AUTO_RETRY_MAX
                     if (
                         self.config.AUTO_RETRY_ENABLED
@@ -550,8 +612,11 @@ class DownloadManager:
                 log.warning(f"Pending download not found: {url}")
                 continue
 
+            download.status = DownloadStatus.PENDING
+            download.msg = None
             await self.queue.put(download)
             await self.pending.delete(url)
+            await self.notifier.updated(download)
             asyncio.create_task(self._start_download(download))
 
         return {"status": "ok"}
@@ -649,6 +714,61 @@ class DownloadManager:
             await self.notifier.added(download)
             asyncio.create_task(self._start_download(download, auto_start=True))
         return {"status": "ok"}
+
+
+    async def pause(self, urls: list[str]) -> dict[str, Any]:
+        """Pause running downloads (kill worker, keep partial file, move to pending)."""
+        for url in urls:
+            download = await self.queue.get(url)
+            if not download:
+                # Already pending?
+                if await self.pending.exists(url):
+                    continue
+                log.warning(f"Pause target not in queue: {url}")
+                continue
+            worker = self._workers.get(url)
+            if worker and worker.is_running:
+                download.status = DownloadStatus.PAUSED
+                download.msg = "Pausing..."
+                await self.notifier.updated(download)
+                worker.pause()  # cleanup parks into pending via is_paused
+            else:
+                # Not running yet — move queue -> pending
+                await self.queue.delete(url)
+                download.status = DownloadStatus.PAUSED
+                download.msg = "Paused"
+                download.speed = None
+                download.eta = None
+                await self.pending.put(download)
+                await self.notifier.updated(download)
+        return {"status": "ok"}
+
+    async def preview(self, url: str) -> dict[str, Any]:
+        """Return preview metadata for a URL without enqueuing a download."""
+        ok, err = validate_download_url(url)
+        if not ok:
+            return {"status": "error", "msg": friendly_error(err) if err else err}
+        url, fb_err = resolve_facebook_url(url)
+        if fb_err:
+            return {"status": "error", "msg": fb_err}
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                extract_preview_info,
+                url,
+                self.config.DOWNLOAD_DIR,
+                self.config.TEMP_DIR,
+                sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS)),
+            )
+            return result
+        except yt_dlp.utils.YoutubeDLError as e:
+            raw = str(e)
+            msg = friendly_facebook_error(raw)
+            if msg == raw:
+                msg = friendly_error(raw)
+            return {"status": "error", "msg": msg}
+        except Exception as e:
+            return {"status": "error", "msg": friendly_error(str(e))}
 
     async def get_all(self) -> dict[str, list[dict[str, Any]]]:
         """Get all downloads.

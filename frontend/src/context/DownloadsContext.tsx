@@ -2,9 +2,48 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Download, Configuration, CustomDirs, Status, State, YtdlOptionsUpdate, ChannelResult } from '@/types';
+import {
+  Download,
+  Configuration,
+  CustomDirs,
+  Status,
+  State,
+  YtdlOptionsUpdate,
+  ChannelResult,
+  PreviewResult,
+  AddDownloadOptions,
+} from '@/types';
 import { getApiBaseUrl } from '@/lib/utils';
 import { getAuthHeaders, getSocketAuth } from '@/lib/auth';
+
+function buildFileUrl(download: Download, configuration: Configuration): string | null {
+  if (!download.filename) return null;
+  const baseUrl = getApiBaseUrl();
+  let baseDir = configuration.PUBLIC_HOST_URL || 'download/';
+  if (download.quality === 'audio' || download.filename.endsWith('.mp3') || download.filename.endsWith('.m4a')) {
+    baseDir = configuration.PUBLIC_HOST_AUDIO_URL || 'audio_download/';
+  }
+  if (download.folder) {
+    baseDir += download.folder.replace(/\/?$/, '/') ;
+  }
+  return `${baseUrl}/${baseDir}${encodeURIComponent(download.filename)}`;
+}
+
+function triggerBrowserDownload(download: Download, configuration: Configuration) {
+  const href = buildFileUrl(download, configuration);
+  if (!href) return;
+  try {
+    const link = document.createElement('a');
+    link.href = href;
+    link.setAttribute('download', download.filename || 'download');
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (e) {
+    console.warn('Auto-save download failed', e);
+  }
+}
 
 interface DownloadsContextType {
   queue: Map<string, Download>;
@@ -13,6 +52,8 @@ interface DownloadsContextType {
   configuration: Configuration;
   customDirs: CustomDirs;
   ytdlOptionsUpdateTime: string | null;
+  autoSaveToDevice: boolean;
+  setAutoSaveToDevice: (v: boolean) => void;
   addDownload: (
     url: string,
     quality: string,
@@ -23,14 +64,18 @@ interface DownloadsContextType {
     autoStart?: boolean,
     splitByChapters?: boolean,
     chapterTemplate?: string,
-    speedLimit?: number | null
+    speedLimit?: number | null,
+    options?: AddDownloadOptions
   ) => Promise<Status>;
+  previewUrl: (url: string) => Promise<PreviewResult>;
   deleteDownloads: (where: State, ids: string[]) => Promise<void>;
   startDownloads: (ids: string[]) => Promise<void>;
+  pauseDownloads: (ids: string[]) => Promise<void>;
   retryDownloads: (ids: string[]) => Promise<void>;
   extractChannel: (url: string, limit?: number) => Promise<ChannelResult>;
   toggleChecked: (where: State, id: string) => void;
   setAllChecked: (where: State, checked: boolean) => void;
+  buildFileUrl: (download: Download) => string | null;
 }
 
 const DownloadsContext = createContext<DownloadsContextType | null>(null);
@@ -52,7 +97,41 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     audio_download_dir: [],
   });
   const [ytdlOptionsUpdateTime, setYtdlOptionsUpdateTime] = useState<string | null>(null);
+  const [autoSaveToDevice, setAutoSaveToDeviceState] = useState(true);
   const socketRef = useRef<Socket | null>(null);
+  const configRef = useRef(configuration);
+  const autoSaveRef = useRef(true);
+  const savedUrlsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    configRef.current = configuration;
+  }, [configuration]);
+
+  useEffect(() => {
+    autoSaveRef.current = autoSaveToDevice;
+  }, [autoSaveToDevice]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('svidown_auto_save');
+      if (saved === 'false') {
+        setAutoSaveToDeviceState(false);
+        autoSaveRef.current = false;
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setAutoSaveToDevice = useCallback((v: boolean) => {
+    setAutoSaveToDeviceState(v);
+    autoSaveRef.current = v;
+    try {
+      localStorage.setItem('svidown_auto_save', v ? 'true' : 'false');
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     const baseUrl = getApiBaseUrl();
@@ -100,6 +179,8 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
           data.checked = existing.checked;
           data.deleting = existing.deleting;
         }
+        // paused items live in pending which is merged into queue view via 'all',
+        // but updated events still arrive for paused ones parked in pending
         newQueue.set(data.url, data);
         return newQueue;
       });
@@ -117,6 +198,12 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         newDone.set(data.url, data);
         return newDone;
       });
+      if (autoSaveRef.current && data.status === 'finished' && data.filename) {
+        if (!savedUrlsRef.current.has(data.url)) {
+          savedUrlsRef.current.add(data.url);
+          triggerBrowserDownload(data, configRef.current);
+        }
+      }
     });
 
     socket.on('failed', (strdata: string) => {
@@ -185,9 +272,11 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       autoStart: boolean = true,
       splitByChapters: boolean = false,
       chapterTemplate?: string,
-      speedLimit?: number | null
+      speedLimit?: number | null,
+      options?: AddDownloadOptions
     ): Promise<Status> => {
       const baseUrl = getApiBaseUrl();
+      const opts = options || {};
       try {
         const response = await fetch(`${baseUrl}/add`, {
           method: 'POST',
@@ -196,13 +285,16 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
             url,
             quality,
             format,
-            folder: folder || undefined,
-            custom_name_prefix: customNamePrefix || '',
-            playlist_item_limit: playlistItemLimit || 0,
-            auto_start: autoStart,
-            split_by_chapters: splitByChapters,
-            chapter_template: chapterTemplate || configuration.OUTPUT_TEMPLATE_CHAPTER,
-            speed_limit: speedLimit || undefined,
+            folder: folder || opts.folder || undefined,
+            custom_name_prefix: customNamePrefix || opts.customNamePrefix || '',
+            playlist_item_limit: playlistItemLimit ?? opts.playlistItemLimit ?? 0,
+            auto_start: autoStart ?? opts.autoStart ?? true,
+            split_by_chapters: splitByChapters ?? opts.splitByChapters ?? false,
+            chapter_template: chapterTemplate || opts.chapterTemplate || configuration.OUTPUT_TEMPLATE_CHAPTER,
+            speed_limit: speedLimit ?? opts.speedLimit ?? undefined,
+            subtitle_langs: opts.subtitleLangs || undefined,
+            download_sections: opts.downloadSections || undefined,
+            selected_playlist_urls: opts.selectedPlaylistUrls || undefined,
           }),
         });
         const data = await response.json();
@@ -214,8 +306,21 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     [configuration.OUTPUT_TEMPLATE_CHAPTER]
   );
 
+  const previewUrl = useCallback(async (url: string): Promise<PreviewResult> => {
+    const baseUrl = getApiBaseUrl();
+    try {
+      const response = await fetch(`${baseUrl}/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ url }),
+      });
+      return await response.json();
+    } catch (error) {
+      return { status: 'error', msg: String(error) };
+    }
+  }, []);
+
   const deleteDownloads = useCallback(async (where: State, ids: string[]): Promise<void> => {
-    // Mark as deleting
     if (where === 'queue') {
       setQueue((prev) => {
         const newQueue = new Map(prev);
@@ -251,6 +356,15 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
   const startDownloads = useCallback(async (ids: string[]): Promise<void> => {
     const baseUrl = getApiBaseUrl();
     await fetch(`${baseUrl}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ ids }),
+    });
+  }, []);
+
+  const pauseDownloads = useCallback(async (ids: string[]): Promise<void> => {
+    const baseUrl = getApiBaseUrl();
+    await fetch(`${baseUrl}/pause`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ ids }),
@@ -325,6 +439,11 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const buildFileUrlCb = useCallback(
+    (download: Download) => buildFileUrl(download, configuration),
+    [configuration]
+  );
+
   return (
     <DownloadsContext.Provider
       value={{
@@ -334,13 +453,18 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
         configuration,
         customDirs,
         ytdlOptionsUpdateTime,
+        autoSaveToDevice,
+        setAutoSaveToDevice,
         addDownload,
+        previewUrl,
         extractChannel,
         deleteDownloads,
         startDownloads,
+        pauseDownloads,
         retryDownloads,
         toggleChecked,
         setAllChecked,
+        buildFileUrl: buildFileUrlCb,
       }}
     >
       {children}

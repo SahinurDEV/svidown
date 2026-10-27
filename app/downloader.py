@@ -39,6 +39,8 @@ def _download_process(
     chapter_template: str,
     speed_limit: int | None,
     status_queue: multiprocessing.Queue,
+    subtitle_langs: str | None = None,
+    download_sections: str | None = None,
 ) -> None:
     """Download process running in subprocess."""
     debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
@@ -92,6 +94,7 @@ def _download_process(
         "format": format_string,
         "socket_timeout": 30,
         "ignore_no_formats_error": True,
+        "continuedl": True,
         "progress_hooks": [progress_hook],
         "postprocessor_hooks": [postprocessor_hook],
         **ytdl_opts,
@@ -110,6 +113,42 @@ def _download_process(
     # Add speed limit if specified
     if speed_limit and speed_limit > 0:
         params["ratelimit"] = speed_limit
+
+    # Subtitles
+    if subtitle_langs:
+        langs = [x.strip() for x in subtitle_langs.split(",") if x.strip()]
+        if langs:
+            params["writesubtitles"] = True
+            params["writeautomaticsub"] = True
+            params["subtitleslangs"] = langs if "all" not in [l.lower() for l in langs] else ["all"]
+            params.setdefault("postprocessors", []).append({
+                "key": "FFmpegEmbedSubtitle",
+                "already_have_subtitle": False,
+            })
+
+    # Time-range clip via download_sections (yt-dlp)
+    # Must pass parsed (start, end) floats — NOT raw "*0:00-0:05" strings.
+    if download_sections:
+        try:
+            from yt_dlp.utils import download_range_func, parse_duration
+            section = download_sections.strip()
+            if not section.startswith("*"):
+                section = "*" + section
+            # Support "*start-end" or "*start-end,start2-end2"
+            ranges = []
+            for part in section[1:].split(","):
+                part = part.strip()
+                if "-" not in part:
+                    raise ValueError(f"clip must look like 0:30-1:00, got {part!r}")
+                start_s, end_s = part.split("-", 1)
+                start = parse_duration(start_s or "0") or 0
+                end = float("inf") if end_s in ("", "inf", "infinite") else (parse_duration(end_s) or 0)
+                ranges.append([start, end])
+            params["download_ranges"] = download_range_func([], ranges)
+            params["force_keyframes_at_cuts"] = True
+        except Exception as e:
+            status_queue.put({"status": "error", "msg": f"Invalid clip range: {e}"})
+            return
 
     try:
         ret = yt_dlp.YoutubeDL(params=params).download([url])
@@ -158,6 +197,7 @@ class DownloadWorker:
         self._process: multiprocessing.Process | None = None
         self._status_queue: multiprocessing.Queue | None = None
         self._canceled = False
+        self._paused = False
         self._tmpfilename: str | None = None
 
     async def start(
@@ -191,6 +231,8 @@ class DownloadWorker:
                 self.download.chapter_template,
                 self.download.speed_limit,
                 self._status_queue,
+                self.download.subtitle_langs,
+                self.download.download_sections,
             ),
         )
 
@@ -298,6 +340,12 @@ class DownloadWorker:
         if asyncio.iscoroutine(result):
             await result
 
+    def pause(self) -> None:
+        """Pause the download (cancel process but mark as paused)."""
+        log.info(f"Pausing download: {self.download.title}")
+        self._paused = True
+        self.cancel()
+
     def cancel(self) -> None:
         """Cancel the download."""
         log.info(f"Canceling download: {self.download.title}")
@@ -357,6 +405,11 @@ class DownloadWorker:
     def is_canceled(self) -> bool:
         """Check if the download was canceled."""
         return self._canceled
+
+    @property
+    def is_paused(self) -> bool:
+        """Check if the download was paused."""
+        return self._paused
 
 
 def extract_info(
@@ -504,4 +557,155 @@ def extract_channel_info(
         "title": info.get("title", ""),
         "channel": info.get("channel") or info.get("uploader", ""),
         "entries": entries,
+    }
+
+
+def extract_preview_info(
+    url: str,
+    download_dir: str,
+    temp_dir: str,
+    ytdl_opts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Extract rich preview info (formats with sizes) without downloading."""
+    debug_logging = logging.getLogger().isEnabledFor(logging.DEBUG)
+    opts = dict(ytdl_opts or {})
+
+    if "impersonate" in opts:
+        opts["impersonate"] = yt_dlp.networking.impersonate.ImpersonateTarget.from_str(
+            opts["impersonate"]
+        )
+
+    params = {
+        "quiet": not debug_logging,
+        "verbose": debug_logging,
+        "no_color": True,
+        "skip_download": True,
+        "ignore_no_formats_error": False,
+        "noplaylist": False,
+        "extract_flat": False,
+        "paths": {"home": download_dir, "temp": temp_dir},
+        **opts,
+    }
+
+    info = yt_dlp.YoutubeDL(params=params).extract_info(url, download=False)
+    if not info:
+        return {"status": "error", "msg": "No info returned"}
+
+    etype = info.get("_type", "video")
+    if etype == "playlist":
+        entries = []
+        for e in (info.get("entries") or [])[:50]:
+            if not e:
+                continue
+            entries.append({
+                "id": e.get("id", ""),
+                "title": e.get("title") or e.get("id") or "Untitled",
+                "url": e.get("webpage_url") or e.get("url") or "",
+                "duration": e.get("duration"),
+                "thumbnail": e.get("thumbnail") or (e.get("thumbnails") or [{}])[-1].get("url"),
+            })
+        return {
+            "status": "ok",
+            "type": "playlist",
+            "id": info.get("id", ""),
+            "title": info.get("title") or info.get("id") or "Playlist",
+            "thumbnail": info.get("thumbnail"),
+            "entries": entries,
+            "entry_count": len(info.get("entries") or []),
+        }
+
+    formats_out = []
+    seen = set()
+    for f in info.get("formats") or []:
+        height = f.get("height")
+        ext = f.get("ext")
+        vcodec = f.get("vcodec") or "none"
+        acodec = f.get("acodec") or "none"
+        filesize = f.get("filesize") or f.get("filesize_approx")
+        format_id = f.get("format_id")
+        if not format_id:
+            continue
+        # Prefer progressive or combined estimates
+        label = None
+        if vcodec != "none" and height:
+            label = f"{height}p"
+        elif vcodec == "none" and acodec != "none":
+            label = f"audio-{ext or 'm4a'}"
+        else:
+            continue
+        key = (label, ext)
+        if key in seen:
+            continue
+        seen.add(key)
+        formats_out.append({
+            "format_id": format_id,
+            "label": label,
+            "ext": ext,
+            "height": height,
+            "filesize": filesize,
+            "tbr": f.get("tbr"),
+            "vcodec": vcodec,
+            "acodec": acodec,
+        })
+
+    # Aggregate common quality buckets with best filesize estimate
+    buckets: dict[str, dict] = {}
+    for f in formats_out:
+        label = f["label"]
+        if label.startswith("audio"):
+            bucket = "mp3"
+        elif f.get("height"):
+            h = f["height"]
+            if h >= 1080:
+                bucket = "1080p"
+            elif h >= 720:
+                bucket = "720p"
+            elif h >= 480:
+                bucket = "480p"
+            else:
+                bucket = f"{h}p"
+        else:
+            continue
+        prev = buckets.get(bucket)
+        size = f.get("filesize") or 0
+        if not prev or (size and size > (prev.get("filesize") or 0)):
+            buckets[bucket] = {
+                "quality": bucket,
+                "filesize": f.get("filesize"),
+                "ext": f.get("ext"),
+                "format_id": f.get("format_id"),
+            }
+
+    # duration-based rough estimate when filesize missing
+    duration = info.get("duration") or 0
+    for b in buckets.values():
+        if not b.get("filesize") and duration and info.get("formats"):
+            # leave None — UI shows "—"
+            pass
+
+    thumb = info.get("thumbnail")
+    if not thumb:
+        thumbs = info.get("thumbnails") or []
+        if thumbs:
+            thumb = thumbs[-1].get("url")
+
+    subs = []
+    for lang, tracks in (info.get("subtitles") or {}).items():
+        subs.append({"lang": lang, "auto": False})
+    for lang, tracks in (info.get("automatic_captions") or {}).items():
+        if lang not in {s["lang"] for s in subs}:
+            subs.append({"lang": lang, "auto": True})
+
+    return {
+        "status": "ok",
+        "type": "video",
+        "id": info.get("id", ""),
+        "title": info.get("title") or info.get("id") or "Untitled",
+        "url": info.get("webpage_url") or url,
+        "duration": duration,
+        "thumbnail": thumb,
+        "uploader": info.get("uploader") or info.get("channel"),
+        "qualities": list(buckets.values()),
+        "formats": formats_out[:40],
+        "subtitles": sorted(subs, key=lambda s: (s["auto"], s["lang"]))[:40],
     }

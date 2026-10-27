@@ -12,6 +12,7 @@ class DownloadStatus(str, Enum):
     PENDING = "pending"
     PREPARING = "preparing"
     DOWNLOADING = "downloading"
+    PAUSED = "paused"
     FINISHED = "finished"
     ERROR = "error"
 
@@ -64,6 +65,12 @@ class Download:
     retry_count: int = 0
     max_retries: int = 2
     failure_reason: str | None = None
+
+    # UX options
+    subtitle_langs: str | None = None  # e.g. "en,es" or "all"
+    download_sections: str | None = None  # yt-dlp --download-sections, e.g. "*0:30-1:00"
+    thumbnail: str | None = None
+    duration: float | None = None
 
     def __post_init__(self):
         """Apply custom name prefix to id and title if provided."""

@@ -10,7 +10,7 @@ export interface Download {
   split_by_chapters?: boolean;
   chapter_template?: string;
   speed_limit?: number;
-  status: 'pending' | 'preparing' | 'downloading' | 'finished' | 'error';
+  status: 'pending' | 'preparing' | 'downloading' | 'paused' | 'finished' | 'error';
   msg: string;
   percent: number;
   speed: number;
@@ -22,6 +22,10 @@ export interface Download {
   failure_reason?: string;
   retry_count?: number;
   max_retries?: number;
+  subtitle_langs?: string;
+  download_sections?: string;
+  thumbnail?: string;
+  duration?: number;
   deleting?: boolean;
   chapter_files?: Array<{ filename: string; size: number }>;
 }
@@ -91,3 +95,39 @@ export interface ChannelResult {
 }
 
 export type State = 'queue' | 'done';
+
+export interface PreviewQuality {
+  quality: string;
+  filesize?: number | null;
+  ext?: string;
+  format_id?: string;
+}
+
+export interface PreviewResult {
+  status: 'ok' | 'error';
+  type?: 'video' | 'playlist';
+  id?: string;
+  title?: string;
+  url?: string;
+  duration?: number;
+  thumbnail?: string;
+  uploader?: string;
+  qualities?: PreviewQuality[];
+  subtitles?: Array<{ lang: string; auto: boolean }>;
+  entries?: ChannelEntry[];
+  entry_count?: number;
+  msg?: string;
+}
+
+export interface AddDownloadOptions {
+  folder?: string;
+  customNamePrefix?: string;
+  playlistItemLimit?: number;
+  autoStart?: boolean;
+  splitByChapters?: boolean;
+  chapterTemplate?: string;
+  speedLimit?: number | null;
+  subtitleLangs?: string;
+  downloadSections?: string;
+  selectedPlaylistUrls?: string[];
+}
