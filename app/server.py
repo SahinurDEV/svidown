@@ -4,30 +4,30 @@
 MIT License - A fresh implementation of a web-based video downloader.
 """
 
+import asyncio
 import logging
 import os
 import socket
 import ssl
 import sys
+import time
+from pathlib import Path
 
 from aiohttp import web
 from aiohttp.log import access_logger
 import socketio
 
+from .auth import AuthConfig, auth_middleware
 from .config import Config, parse_log_level
 from .download_manager import DownloadManager
 from .routes import setup_routes, setup_cors
 from .websocket import setup_websocket, start_options_watcher
+from .ytdlp_updater import ytdlp_update_loop
 
 log = logging.getLogger("server")
 
 
 def setup_logging(level: str) -> None:
-    """Configure logging.
-
-    Args:
-        level: Log level string (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    """
     if not logging.getLogger().hasHandlers():
         logging.basicConfig(
             level=parse_log_level(level),
@@ -36,7 +36,6 @@ def setup_logging(level: str) -> None:
 
 
 def supports_reuse_port() -> bool:
-    """Check if SO_REUSEPORT is supported."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -46,84 +45,119 @@ def supports_reuse_port() -> bool:
         return False
 
 
+def cleanup_temp_dir(temp_dir: str, max_age_hours: float) -> int:
+    """Remove stale files under TEMP_DIR older than max_age_hours."""
+    if not temp_dir or max_age_hours <= 0:
+        return 0
+    root = Path(temp_dir)
+    if not root.is_dir():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    removed = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        log.info(f"Cleaned {removed} stale temp files from {temp_dir}")
+    return removed
+
+
 def create_app(config: Config | None = None) -> tuple[web.Application, DownloadManager]:
-    """Create the aiohttp application.
-
-    Args:
-        config: Application configuration (loaded from env if not provided)
-
-    Returns:
-        Tuple of (application, download_manager)
-    """
-    # Load config if not provided
     if config is None:
         config = Config.from_env()
 
-    # Create aiohttp app and Socket.IO server
-    app = web.Application()
-    sio = socketio.AsyncServer(cors_allowed_origins="*")
+    auth = AuthConfig(
+        username=config.AUTH_USERNAME,
+        password=config.AUTH_PASSWORD,
+        token=config.AUTH_TOKEN,
+    )
+
+    app = web.Application(middlewares=[auth_middleware])
+    app["auth"] = auth
+    app["config"] = config
+
+    # Socket.IO CORS: use configured origins (empty = deny cross-origin browser clients)
+    cors_origins = config.CORS_ORIGINS if config.CORS_ORIGINS else []
+    if cors_origins == ["*"]:
+        sio_cors = "*"
+    elif cors_origins:
+        sio_cors = cors_origins
+    else:
+        # Restrictive default: no cross-origin Socket.IO
+        sio_cors = []
+
+    sio = socketio.AsyncServer(
+        cors_allowed_origins=sio_cors if sio_cors != [] else [],
+        async_mode="aiohttp",
+    )
+    # Attach with auth for connect when enabled
     sio.attach(app, socketio_path=config.URL_PREFIX + "socket.io")
 
-    # Create download manager with websocket notifier
-    notifier = setup_websocket(sio, config, None)  # Manager set below
-    manager = DownloadManager(config, notifier)
+    # Placeholder notifier until manager exists
+    class _Nop:
+        async def added(self, d): pass
+        async def updated(self, d): pass
+        async def completed(self, d): pass
+        async def failed(self, d): pass
+        async def canceled(self, u): pass
+        async def cleared(self, u): pass
 
-    # Re-setup websocket with manager (needed for connect handler)
-    notifier = setup_websocket(sio, config, manager)
-    # Update manager's notifier reference
+    manager = DownloadManager(config, _Nop())
+    notifier = setup_websocket(sio, config, manager, auth=auth)
     manager.notifier = notifier
 
-    # Setup routes
     setup_routes(app, config, manager)
-    setup_cors(app)
+    setup_cors(app, config.CORS_ORIGINS)
 
-    # Initialize manager on startup
     async def on_startup(app):
+        cleanup_temp_dir(config.TEMP_DIR, config.TEMP_MAX_AGE_HOURS)
+        # Prune history on boot
+        try:
+            manager.done.prune(config.HISTORY_MAX_ITEMS, config.HISTORY_TTL_DAYS)
+        except Exception as e:
+            log.warning(f"Startup history prune failed: {e}")
+
         await manager.initialize()
         start_options_watcher(sio, config)
+        asyncio.create_task(
+            ytdlp_update_loop(
+                enabled=config.YTDLP_AUTO_UPDATE,
+                interval_hours=config.YTDLP_UPDATE_INTERVAL_HOURS,
+                run_on_start=config.YTDLP_UPDATE_ON_START,
+            )
+        )
 
     app.on_startup.append(on_startup)
-
-    # Store references for testing
-    app["config"] = config
     app["manager"] = manager
     app["sio"] = sio
-
     return app, manager
 
 
 def run_server(config: Config | None = None) -> None:
-    """Run the server.
-
-    Args:
-        config: Application configuration (loaded from env if not provided)
-    """
-    # Load config if not provided
     if config is None:
         config = Config.from_env()
 
-    # Setup logging
     setup_logging(config.LOGLEVEL)
     logging.getLogger().setLevel(parse_log_level(config.LOGLEVEL))
 
     log.info(f"Starting Svidown server on {config.HOST}:{config.PORT}")
+    if config.AUTH_TOKEN or (config.AUTH_USERNAME and config.AUTH_PASSWORD):
+        log.info("Authentication is ENABLED")
+    else:
+        log.warning("Authentication is DISABLED — anyone who can reach the port can use the API")
 
-    # Create application
     app, _ = create_app(config)
-
-    # Configure access logging
     access_log = access_logger if config.ENABLE_ACCESSLOG else None
 
-    # Configure SSL if enabled
     ssl_context = None
     if config.HTTPS:
         ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        ssl_context.load_cert_chain(
-            certfile=config.CERTFILE,
-            keyfile=config.KEYFILE,
-        )
+        ssl_context.load_cert_chain(certfile=config.CERTFILE, keyfile=config.KEYFILE)
 
-    # Run the server
     web.run_app(
         app,
         host=config.HOST,
@@ -135,10 +169,7 @@ def run_server(config: Config | None = None) -> None:
 
 
 def main() -> None:
-    """Main entry point."""
-    # Early logging setup for startup messages
     setup_logging(os.environ.get("LOGLEVEL", "INFO"))
-
     try:
         run_server()
     except KeyboardInterrupt:

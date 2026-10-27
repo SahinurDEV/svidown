@@ -394,7 +394,7 @@ def extract_info(
         "verbose": debug_logging,
         "no_color": True,
         "extract_flat": True,
-        "ignore_no_formats_error": True,
+        "ignore_no_formats_error": False,
         "noplaylist": True,
         "paths": {"home": download_dir, "temp": temp_dir},
         **opts,
@@ -436,7 +436,7 @@ def extract_channel_info(
         "verbose": debug_logging,
         "no_color": True,
         "extract_flat": True,
-        "ignore_no_formats_error": True,
+        "ignore_no_formats_error": False,
         "paths": {"home": download_dir, "temp": temp_dir},
         **opts,
     }

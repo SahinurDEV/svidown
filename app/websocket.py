@@ -37,9 +37,15 @@ class SocketNotifier:
         await self.sio.emit("updated", self._encode(download))
 
     async def completed(self, download: Download) -> None:
-        """Notify that a download completed."""
+        """Notify that a download completed successfully."""
         log.info(f"Download completed: {download.title}")
         await self.sio.emit("completed", self._encode(download))
+
+    async def failed(self, download: Download) -> None:
+        """Notify that a download failed."""
+        log.info(f"Download failed: {download.title} — {download.msg or download.error}")
+        await self.sio.emit("failed", self._encode(download))
+        # Also push into done list UI via completed-compatible payload on 'failed'
 
     async def canceled(self, url: str) -> None:
         """Notify that a download was canceled."""
@@ -56,6 +62,7 @@ def setup_websocket(
     sio: socketio.AsyncServer,
     config: Config,
     manager: DownloadManager,
+    auth=None,
 ) -> SocketNotifier:
     """Set up Socket.IO event handlers.
 
@@ -63,15 +70,28 @@ def setup_websocket(
         sio: Socket.IO server instance
         config: Application configuration
         manager: Download manager instance
+        auth: Optional AuthConfig for connect authentication
 
     Returns:
         Socket notifier instance
     """
     notifier = SocketNotifier(sio)
 
+    # Avoid duplicate handlers if called twice during app wiring
+    if getattr(sio, "_svidown_handlers_ready", False):
+        return notifier
+
     @sio.event
-    async def connect(sid: str, environ: dict) -> None:
+    async def connect(sid: str, environ: dict, auth_payload=None) -> None:
         """Handle client connection."""
+        if auth is not None:
+            from .auth import socketio_auth_callback
+            if not socketio_auth_callback(auth)(sid, environ, auth_payload):
+                raise ConnectionRefusedError("Unauthorized")
+
+        if manager is None:
+            return
+
         log.info(f"Client connected: {sid}")
 
         # Send current downloads
@@ -112,6 +132,7 @@ def setup_websocket(
         """Handle client disconnection."""
         log.info(f"Client disconnected: {sid}")
 
+    sio._svidown_handlers_ready = True
     return notifier
 
 

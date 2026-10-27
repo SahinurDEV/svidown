@@ -13,6 +13,9 @@ from .config import Config
 from .download_manager import DownloadManager
 from .downloader import extract_channel_info
 from .models import DownloadEncoder
+from .url_safety import validate_download_url
+from .cookies_util import sanitize_ytdl_options
+from .ytdlp_updater import get_version_info
 
 log = logging.getLogger("routes")
 
@@ -147,6 +150,10 @@ def create_routes(
         if not url:
             raise web.HTTPBadRequest(reason="Missing 'url'")
 
+        ok, err = validate_download_url(url)
+        if not ok:
+            return json_response({"status": "error", "msg": err})
+
         limit = int(post.get("limit", 0))
 
         log.info(f"Extracting channel/playlist: {url} limit={limit}")
@@ -160,7 +167,7 @@ def create_routes(
                 config.DOWNLOAD_DIR,
                 config.TEMP_DIR,
                 limit,
-                config.YTDL_OPTIONS,
+                sanitize_ytdl_options(dict(config.YTDL_OPTIONS)),
             )
             return json_response({"status": "ok", **result})
         except Exception as e:
@@ -174,15 +181,15 @@ def create_routes(
         result = await manager.get_all()
         return json_response(result)
 
+    @routes.get(config.URL_PREFIX + "health")
+    async def health(request: web.Request) -> web.Response:
+        """Liveness probe (no auth required)."""
+        return web.json_response({"status": "ok"})
+
     @routes.get(config.URL_PREFIX + "version")
     async def get_version(request: web.Request) -> web.Response:
-        """Get version information."""
-        from yt_dlp.version import __version__ as ytdlp_version
-
-        return web.json_response({
-            "yt-dlp": ytdlp_version,
-            "version": os.environ.get("SVIDOWN_VERSION", "1.0.0"),
-        })
+        """Get version information including yt-dlp freshness."""
+        return web.json_response(get_version_info(config.YTDLP_STALE_AFTER_DAYS))
 
     @routes.get(config.URL_PREFIX)
     async def index(request: web.Request) -> web.Response:
@@ -314,18 +321,30 @@ def setup_routes(
     app.router.add_route("OPTIONS", config.URL_PREFIX + "extract-channel", cors_options)
 
 
-def setup_cors(app: web.Application) -> None:
-    """Set up CORS headers.
+def setup_cors(app: web.Application, allowed_origins: list | None = None) -> None:
+    """Set up CORS headers from an allowlist.
 
     Args:
         app: aiohttp application
+        allowed_origins: ["*"] for any, list of origins, or empty/None to omit ACAO
     """
+    allowed = allowed_origins or []
+
     async def on_prepare(
         request: web.Request,
         response: web.StreamResponse,
     ) -> None:
-        if "Origin" in request.headers:
-            response.headers["Access-Control-Allow-Origin"] = request.headers["Origin"]
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        origin = request.headers.get("Origin")
+        if not origin:
+            return
+        if allowed == ["*"]:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        elif origin in allowed:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        # else: no ACAO header — browser blocks cross-origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-API-Token"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
 
     app.on_response_prepare.append(on_prepare)

@@ -14,6 +14,9 @@ from .downloader import DownloadWorker, extract_info
 from .formats import is_audio_format, is_audio_quality
 from .models import Download, DownloadStatus
 from .persistence import DownloadStore
+from .url_safety import validate_download_url
+from .disk_guard import check_disk_space
+from .cookies_util import sanitize_ytdl_options
 
 log = logging.getLogger("manager")
 
@@ -24,6 +27,7 @@ class DownloadNotifier(Protocol):
     async def added(self, download: Download) -> None: ...
     async def updated(self, download: Download) -> None: ...
     async def completed(self, download: Download) -> None: ...
+    async def failed(self, download: Download) -> None: ...
     async def canceled(self, url: str) -> None: ...
     async def cleared(self, url: str) -> None: ...
 
@@ -93,6 +97,17 @@ class DownloadManager:
             f"folder={folder} auto_start={auto_start}"
         )
 
+        ok, err = validate_download_url(url)
+        if not ok:
+            return {"status": "error", "msg": err}
+
+        disk_ok, disk_msg = check_disk_space(
+            self.config.DOWNLOAD_DIR,
+            self.config.MIN_FREE_DISK_MB,
+        )
+        if not disk_ok:
+            return {"status": "error", "msg": disk_msg}
+
         # Recursion detection for playlists
         already = already or set()
         if url in already:
@@ -112,7 +127,7 @@ class DownloadManager:
                 url,
                 self.config.DOWNLOAD_DIR,
                 self.config.TEMP_DIR,
-                self.config.YTDL_OPTIONS,
+                sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS)),
             )
         except yt_dlp.utils.YoutubeDLError as e:
             return {"status": "error", "msg": str(e)}
@@ -429,8 +444,8 @@ class DownloadManager:
                             f"%({prop})s", str(value)
                         )
 
-            # Build ytdl options
-            ytdl_opts = dict(self.config.YTDL_OPTIONS)
+            # Build ytdl options (re-sanitize cookiefile in case file changed)
+            ytdl_opts = sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS))
             if download.playlist_item_limit > 0:
                 ytdl_opts["playlistend"] = download.playlist_item_limit
 
@@ -460,7 +475,8 @@ class DownloadManager:
         # Handle failed downloads
         if download.status != DownloadStatus.FINISHED:
             worker.cleanup_temp_file()
-            download.status = DownloadStatus.ERROR
+            if download.status != DownloadStatus.ERROR:
+                download.status = DownloadStatus.ERROR
 
         worker.cleanup()
 
@@ -477,7 +493,19 @@ class DownloadManager:
                 # Strip heavy entry data before persisting to history
                 download.entry = None
                 self.done.put_sync(download)
-                asyncio.create_task(self.notifier.completed(download))
+                # Cap / TTL prune history
+                try:
+                    self.done.prune(
+                        self.config.HISTORY_MAX_ITEMS,
+                        self.config.HISTORY_TTL_DAYS,
+                    )
+                except Exception as e:
+                    log.warning(f"History prune failed: {e}")
+
+                if download.status == DownloadStatus.ERROR:
+                    asyncio.create_task(self.notifier.failed(download))
+                else:
+                    asyncio.create_task(self.notifier.completed(download))
 
     async def start_pending(self, urls: list[str]) -> dict[str, Any]:
         """Start pending downloads.

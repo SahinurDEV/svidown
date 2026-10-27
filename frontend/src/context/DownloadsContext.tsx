@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { io, Socket } from 'socket.io-client';
 import { Download, Configuration, CustomDirs, Status, State, YtdlOptionsUpdate, ChannelResult } from '@/types';
 import { getApiBaseUrl } from '@/lib/utils';
+import { getAuthHeaders, getSocketAuth } from '@/lib/auth';
 
 interface DownloadsContextType {
   queue: Map<string, Download>;
@@ -57,6 +58,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     const socket = io(baseUrl, {
       transports: ['websocket', 'polling'],
       path: '/socket.io',
+      auth: getSocketAuth(),
     });
     socketRef.current = socket;
 
@@ -112,6 +114,20 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       setDone((prev) => {
         const newDone = new Map(prev);
         newDone.set(data.url, data);
+        return newDone;
+      });
+    });
+
+    socket.on('failed', (strdata: string) => {
+      const data: Download = JSON.parse(strdata);
+      setQueue((prev) => {
+        const newQueue = new Map(prev);
+        newQueue.delete(data.url);
+        return newQueue;
+      });
+      setDone((prev) => {
+        const newDone = new Map(prev);
+        newDone.set(data.url, { ...data, status: 'error' });
         return newDone;
       });
     });
@@ -174,7 +190,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch(`${baseUrl}/add`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({
             url,
             quality,
@@ -226,7 +242,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     const baseUrl = getApiBaseUrl();
     await fetch(`${baseUrl}/delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ where, ids }),
     });
   }, []);
@@ -235,7 +251,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
     const baseUrl = getApiBaseUrl();
     await fetch(`${baseUrl}/start`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ ids }),
     });
   }, []);
@@ -246,7 +262,7 @@ export function DownloadsProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch(`${baseUrl}/extract-channel`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
           body: JSON.stringify({ url, limit: limit || 0 }),
         });
         return await response.json();
