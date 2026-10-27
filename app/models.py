@@ -60,6 +60,11 @@ class Download:
     # Entry data from yt-dlp extraction (used for playlist info)
     entry: dict[str, Any] | None = None
 
+    # Auto-retry bookkeeping
+    retry_count: int = 0
+    max_retries: int = 2
+    failure_reason: str | None = None
+
     def __post_init__(self):
         """Apply custom name prefix to id and title if provided."""
         if self.custom_name_prefix:
@@ -89,6 +94,7 @@ class Download:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Download":
         """Create Download from dictionary."""
+        from dataclasses import fields as dc_fields
         data = data.copy()
 
         # Convert status string to enum
@@ -102,6 +108,8 @@ class Download:
                 for cf in data["chapter_files"]
             ]
 
+        allowed = {f.name for f in dc_fields(cls)}
+        data = {k: v for k, v in data.items() if k in allowed}
         return cls(**data)
 
     @classmethod

@@ -393,6 +393,22 @@ export default function AddDownloadForm() {
     return option?.value ?? null;
   };
 
+  // Prefill from ?url= (PWA share target / deep link)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const shared = params.get('url');
+      if (shared) {
+        setUrl(shared);
+        // clean query without reload
+        const clean = window.location.pathname;
+        window.history.replaceState({}, '', clean);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   // Load preferences from cookies
   useEffect(() => {
     const savedFormat = getCookie('svidown_format');
@@ -631,6 +647,7 @@ export default function AddDownloadForm() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="Paste video, playlist or channel URL here..."
+                data-testid="url-input"
                 disabled={addInProgress || loading}
                 className="w-full px-4 py-3 text-lg border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 transition-all pr-24"
               />
@@ -695,6 +712,37 @@ export default function AddDownloadForm() {
             </div>
           )}
 
+          {/* Quick quality / format presets */}
+          <div className="flex flex-wrap gap-2 mb-4" data-testid="quality-presets">
+            {[
+              { label: 'Best MP4', f: 'mp4', q: 'best' },
+              { label: '1080p', f: 'mp4', q: '1080' },
+              { label: '720p', f: 'mp4', q: '720' },
+              { label: '480p', f: 'mp4', q: '480' },
+              { label: 'MP3 audio', f: 'mp3', q: '192' },
+            ].map((p) => {
+              const active = format === p.f && quality === p.q;
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={addInProgress || loading}
+                  onClick={() => {
+                    handleFormatChange(p.f);
+                    handleQualityChange(p.q);
+                  }}
+                  className={`px-3 py-1.5 rounded-full text-xs sm:text-sm font-medium border transition-colors ${
+                    active
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:border-blue-400'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+
           {/* Options Row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
             <div>
@@ -705,6 +753,7 @@ export default function AddDownloadForm() {
                 value={quality}
                 onChange={(e) => handleQualityChange(e.target.value)}
                 disabled={addInProgress || loading}
+                data-testid="quality-select"
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
               >
                 {qualities.map((q) => (
@@ -723,6 +772,7 @@ export default function AddDownloadForm() {
                 value={format}
                 onChange={(e) => handleFormatChange(e.target.value)}
                 disabled={addInProgress || loading}
+                data-testid="format-select"
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
               >
                 {Formats.map((f) => (

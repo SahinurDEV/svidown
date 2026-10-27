@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useDownloads } from '@/context/DownloadsContext';
 import { getApiBaseUrl } from '@/lib/utils';
+import { getAuthHeaders } from '@/lib/auth';
 import { Globe, Shield, Video } from 'lucide-react';
 
 export default function Footer() {
@@ -14,7 +15,7 @@ export default function Footer() {
     const fetchVersion = async () => {
       try {
         const baseUrl = getApiBaseUrl();
-        const response = await fetch(`${baseUrl}/version`);
+        const response = await fetch(`${baseUrl}/version`, { headers: getAuthHeaders() });
         const data = await response.json();
         setYtDlpVersion(data['yt-dlp']);
         setAppVersion(data.version);

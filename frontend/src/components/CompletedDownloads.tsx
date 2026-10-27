@@ -21,7 +21,7 @@ const PAGE_SIZE = 50;
 type FilterMode = 'all' | 'finished' | 'error';
 
 export default function CompletedDownloads() {
-  const { done, configuration, deleteDownloads, addDownload, toggleChecked, setAllChecked } =
+  const { done, configuration, deleteDownloads, addDownload, retryDownloads, toggleChecked, setAllChecked } =
     useDownloads();
 
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -89,36 +89,14 @@ export default function CompletedDownloads() {
   };
 
   const handleRetryFailed = async () => {
-    const failedDownloads = allDownloads.filter((d) => d.status === 'error');
-    for (const dl of failedDownloads) {
-      await addDownload(
-        dl.url,
-        dl.quality,
-        dl.format,
-        dl.folder,
-        dl.custom_name_prefix,
-        dl.playlist_item_limit,
-        true,
-        dl.split_by_chapters,
-        dl.chapter_template
-      );
-      await deleteDownloads('done', [dl.url]);
+    const ids = allDownloads.filter((d) => d.status === 'error').map((d) => d.url);
+    if (ids.length > 0) {
+      await retryDownloads(ids);
     }
   };
 
   const handleRetryOne = async (dl: typeof allDownloads[0]) => {
-    await addDownload(
-      dl.url,
-      dl.quality,
-      dl.format,
-      dl.folder,
-      dl.custom_name_prefix,
-      dl.playlist_item_limit,
-      true,
-      dl.split_by_chapters,
-      dl.chapter_template
-    );
-    await deleteDownloads('done', [dl.url]);
+    await retryDownloads([dl.url]);
   };
 
   const handleDeleteOne = async (id: string) => {
@@ -371,12 +349,12 @@ export default function CompletedDownloads() {
                               {download.title}
                             </span>
                           )}
-                          {download.msg && (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                              {download.msg}
+                          {(download.failure_reason || download.msg) && (
+                            <p className="text-xs text-red-500 dark:text-red-400 mt-1 break-words" data-testid="failure-reason">
+                              {download.failure_reason || download.msg}
                             </p>
                           )}
-                          {download.error && (
+                          {download.error && !download.failure_reason && (
                             <p className="text-xs text-red-500 mt-1">Error: {download.error}</p>
                           )}
                         </div>

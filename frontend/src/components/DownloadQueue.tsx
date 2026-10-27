@@ -156,6 +156,19 @@ export default function DownloadQueue() {
                       {download.status === 'preparing' && (
                         <span className="text-xs text-blue-500">Preparing...</span>
                       )}
+                      {(download.msg || download.failure_reason) && (
+                        <p className="text-xs text-amber-600 dark:text-amber-400 break-words" data-testid="queue-failure-reason">
+                          {download.msg || download.failure_reason}
+                          {typeof download.retry_count === 'number' && download.retry_count > 0
+                            ? ` (retry ${download.retry_count}/${download.max_retries ?? 2})`
+                            : ''}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-1 text-[10px] uppercase tracking-wide text-gray-400">
+                        <span>{download.format}</span>
+                        <span>·</span>
+                        <span>{download.quality}</span>
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-400">

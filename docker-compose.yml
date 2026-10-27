@@ -8,10 +8,28 @@ services:
       - "${PORT:-3000}:${PORT:-3000}"
     environment:
       - PORT=${PORT:-3000}
-      # Browser cookies - required for Instagram, fixes YouTube datacenter blocks
-      # Export from browser with "Get cookies.txt LOCALLY" extension
-      # Save to ./cookies/cookies.txt then restart
-      - YTDL_OPTIONS={"cookiefile":"/cookies/cookies.txt"}
+      # Optional auth (uncomment to enable):
+      # - AUTH_USERNAME=admin
+      # - AUTH_PASSWORD=changeme
+      # - AUTH_TOKEN=long-random-token
+      # CORS: leave empty for same-origin only; use * only on trusted LAN
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - YTDLP_AUTO_UPDATE=${YTDLP_AUTO_UPDATE:-true}
+      - YTDLP_UPDATE_ON_START=${YTDLP_UPDATE_ON_START:-true}
+      - YTDLP_UPDATE_INTERVAL_HOURS=${YTDLP_UPDATE_INTERVAL_HOURS:-24}
+      - MIN_FREE_DISK_MB=${MIN_FREE_DISK_MB:-512}
+      - HISTORY_MAX_ITEMS=${HISTORY_MAX_ITEMS:-500}
+      - HISTORY_TTL_DAYS=${HISTORY_TTL_DAYS:-30}
+      # Cookies: place a Netscape cookies.txt at ./cookies/cookies.txt
+      # Export with the "Get cookies.txt LOCALLY" browser extension, then restart.
+      # Empty/invalid files are ignored automatically (downloads continue without cookies).
+      - COOKIES_FILE=/cookies/cookies.txt
     volumes:
       - ./downloads:/downloads
       - ./cookies:/cookies
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

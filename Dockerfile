@@ -72,9 +72,14 @@ ENV UMASK=022
 
 ENV DOWNLOAD_DIR=/downloads
 ENV STATE_DIR=/downloads/.svidown
-ENV TEMP_DIR=/downloads
+ENV TEMP_DIR=/downloads/.svidown-tmp
+ENV YTDLP_AUTO_UPDATE=true
+ENV YTDLP_UPDATE_ON_START=true
+ENV YTDLP_UPDATE_INTERVAL_HOURS=24
 VOLUME /downloads
 EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3   CMD curl -fsS "http://127.0.0.1:${PORT:-3000}/health" >/dev/null || exit 1
 
 # Add build-time argument for version
 ARG VERSION=dev

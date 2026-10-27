@@ -16,10 +16,12 @@ __pycache__
 # Frontend build artifacts (we build in Docker)
 frontend/.next
 frontend/node_modules
+frontend/out
 
-# Downloads and state
+# Local UI stub / test downloads
+ui/
 downloads/
-*.json
+cookies/
 
 # IDE
 .vscode
@@ -28,5 +30,3 @@ downloads/
 # Misc
 .DS_Store
 *.log
-README.md
-docker-compose.yml

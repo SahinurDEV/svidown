@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Iterator
@@ -203,3 +204,31 @@ class DownloadStore:
     def items_sync(self) -> list[tuple[str, Download]]:
         """Synchronous items (use with caution)."""
         return list(self._data.items())
+
+    def prune(self, max_items: int = 0, ttl_days: int = 0) -> int:
+        """Remove old items by TTL and cap. Returns number removed. Sync."""
+        removed = 0
+        if ttl_days and ttl_days > 0:
+            cutoff_ns = time.time_ns() - int(ttl_days * 86400 * 1_000_000_000)
+            to_del = [url for url, dl in self._data.items() if getattr(dl, "timestamp", 0) < cutoff_ns]
+            for url in to_del:
+                del self._data[url]
+                removed += 1
+
+        if max_items and max_items > 0 and len(self._data) > max_items:
+            # Keep newest (highest timestamp)
+            ordered = sorted(self._data.items(), key=lambda x: x[1].timestamp, reverse=True)
+            keep = dict(ordered[:max_items])
+            removed += len(self._data) - len(keep)
+            self._data = __import__("collections").OrderedDict(
+                sorted(keep.items(), key=lambda x: x[1].timestamp)
+            )
+
+        if removed:
+            self._save()
+            log.info(f"Store {self.name}: Pruned {removed} items")
+        return removed
+
+    async def prune_async(self, max_items: int = 0, ttl_days: int = 0) -> int:
+        async with self._lock:
+            return self.prune(max_items, ttl_days)

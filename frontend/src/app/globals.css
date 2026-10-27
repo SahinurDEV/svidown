@@ -52,3 +52,18 @@
 html {
   transition: color 0.2s ease, background-color 0.2s ease;
 }
+
+
+/* Mobile-friendly tweaks */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+@media (max-width: 640px) {
+  table {
+    font-size: 0.875rem;
+  }
+}

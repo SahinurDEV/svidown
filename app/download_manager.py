@@ -14,6 +14,10 @@ from .downloader import DownloadWorker, extract_info
 from .formats import is_audio_format, is_audio_quality
 from .models import Download, DownloadStatus
 from .persistence import DownloadStore
+from .url_safety import validate_download_url
+from .disk_guard import check_disk_space
+from .facebook_urls import resolve_facebook_url, friendly_facebook_error
+from .cookies_util import sanitize_ytdl_options
 
 log = logging.getLogger("manager")
 
@@ -24,6 +28,7 @@ class DownloadNotifier(Protocol):
     async def added(self, download: Download) -> None: ...
     async def updated(self, download: Download) -> None: ...
     async def completed(self, download: Download) -> None: ...
+    async def failed(self, download: Download) -> None: ...
     async def canceled(self, url: str) -> None: ...
     async def cleared(self, url: str) -> None: ...
 
@@ -93,6 +98,21 @@ class DownloadManager:
             f"folder={folder} auto_start={auto_start}"
         )
 
+        ok, err = validate_download_url(url)
+        if not ok:
+            return {"status": "error", "msg": err}
+
+        url, fb_err = resolve_facebook_url(url)
+        if fb_err:
+            return {"status": "error", "msg": fb_err}
+
+        disk_ok, disk_msg = check_disk_space(
+            self.config.DOWNLOAD_DIR,
+            self.config.MIN_FREE_DISK_MB,
+        )
+        if not disk_ok:
+            return {"status": "error", "msg": disk_msg}
+
         # Recursion detection for playlists
         already = already or set()
         if url in already:
@@ -112,10 +132,10 @@ class DownloadManager:
                 url,
                 self.config.DOWNLOAD_DIR,
                 self.config.TEMP_DIR,
-                self.config.YTDL_OPTIONS,
+                sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS)),
             )
         except yt_dlp.utils.YoutubeDLError as e:
-            return {"status": "error", "msg": str(e)}
+            return {"status": "error", "msg": friendly_facebook_error(str(e))}
 
         return await self._add_entry(
             entry=entry,
@@ -317,6 +337,7 @@ class DownloadManager:
             split_by_chapters=split_by_chapters,
             chapter_template=chapter_template,
             speed_limit=speed_limit,
+            max_retries=self.config.AUTO_RETRY_MAX,
         )
 
         # Store and start
@@ -429,8 +450,8 @@ class DownloadManager:
                             f"%({prop})s", str(value)
                         )
 
-            # Build ytdl options
-            ytdl_opts = dict(self.config.YTDL_OPTIONS)
+            # Build ytdl options (re-sanitize cookiefile in case file changed)
+            ytdl_opts = sanitize_ytdl_options(dict(self.config.YTDL_OPTIONS))
             if download.playlist_item_limit > 0:
                 ytdl_opts["playlistend"] = download.playlist_item_limit
 
@@ -460,7 +481,8 @@ class DownloadManager:
         # Handle failed downloads
         if download.status != DownloadStatus.FINISHED:
             worker.cleanup_temp_file()
-            download.status = DownloadStatus.ERROR
+            if download.status != DownloadStatus.ERROR:
+                download.status = DownloadStatus.ERROR
 
         worker.cleanup()
 
@@ -474,10 +496,44 @@ class DownloadManager:
             if worker.is_canceled:
                 asyncio.create_task(self.notifier.canceled(download.url))
             else:
+                if download.status == DownloadStatus.ERROR:
+                    reason = download.msg or download.error or "Unknown error"
+                    download.failure_reason = reason
+                    max_r = download.max_retries if download.max_retries is not None else self.config.AUTO_RETRY_MAX
+                    if (
+                        self.config.AUTO_RETRY_ENABLED
+                        and download.retry_count < max_r
+                    ):
+                        download.retry_count += 1
+                        log.info(
+                            f"Auto-retry {download.retry_count}/{max_r} for {download.title}: {reason[:120]}"
+                        )
+                        download.status = DownloadStatus.PENDING
+                        download.msg = f"Auto-retry {download.retry_count}/{max_r} after: {reason[:200]}"
+                        download.percent = None
+                        download.speed = None
+                        download.eta = None
+                        # Keep in queue and restart
+                        self.queue.put_sync(download)
+                        asyncio.create_task(self.notifier.updated(download))
+                        asyncio.create_task(self._start_download(download, auto_start=True))
+                        return
+
                 # Strip heavy entry data before persisting to history
                 download.entry = None
                 self.done.put_sync(download)
-                asyncio.create_task(self.notifier.completed(download))
+                try:
+                    self.done.prune(
+                        self.config.HISTORY_MAX_ITEMS,
+                        self.config.HISTORY_TTL_DAYS,
+                    )
+                except Exception as e:
+                    log.warning(f"History prune failed: {e}")
+
+                if download.status == DownloadStatus.ERROR:
+                    asyncio.create_task(self.notifier.failed(download))
+                else:
+                    asyncio.create_task(self.notifier.completed(download))
 
     async def start_pending(self, urls: list[str]) -> dict[str, Any]:
         """Start pending downloads.
@@ -562,6 +618,36 @@ class DownloadManager:
             await self.done.delete(url)
             await self.notifier.cleared(url)
 
+        return {"status": "ok"}
+
+
+    async def retry(self, urls: list[str]) -> dict[str, Any]:
+        """Re-queue failed downloads from done history."""
+        for url in urls:
+            download = await self.done.get(url)
+            if not download:
+                # also allow retrying from queue if error-stuck
+                download = await self.queue.get(url)
+                if not download:
+                    log.warning(f"Retry target not found: {url}")
+                    continue
+                await self.queue.delete(url)
+            else:
+                await self.done.delete(url)
+
+            download.status = DownloadStatus.PENDING
+            download.msg = None
+            download.failure_reason = download.failure_reason  # keep last reason visible until success
+            download.percent = None
+            download.speed = None
+            download.eta = None
+            download.filename = None
+            # manual retry resets counter or bumps max
+            download.retry_count = 0
+            download.max_retries = self.config.AUTO_RETRY_MAX
+            await self.queue.put(download)
+            await self.notifier.added(download)
+            asyncio.create_task(self._start_download(download, auto_start=True))
         return {"status": "ok"}
 
     async def get_all(self) -> dict[str, list[dict[str, Any]]]:
